@@ -306,6 +306,72 @@ function extractHiddenInputs(html) {
     .slice(0, 40);
 }
 
+function valueKind(value) {
+  if (!value) return "empty";
+  if (/^(true|false)$/i.test(value)) return "boolean";
+  if (/^\d+$/.test(value)) return "number";
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    return "guid";
+  }
+  if (/^data:image\//i.test(value)) return "image";
+  return "text";
+}
+
+function extractFormDetails(html, baseUrl) {
+  return [...html.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)]
+    .slice(0, 8)
+    .map((match) => {
+      const attrs = extractAttributes(match[1]);
+      const formHtml = match[2];
+      const controls = [...formHtml.matchAll(/<(input|select|textarea|button)\b([^>]*)>/gi)]
+        .map((controlMatch) => {
+          const tag = controlMatch[1].toLowerCase();
+          const controlAttrs = extractAttributes(controlMatch[2]);
+          const raw = controlMatch[0];
+          const text =
+            tag === "button"
+              ? safeText(
+                  formHtml
+                    .slice(controlMatch.index)
+                    .match(/<button\b[^>]*>([\s\S]*?)<\/button>/i)?.[1] || "",
+                  80,
+                )
+              : "";
+
+          return {
+            tag,
+            type: controlAttrs.type || "",
+            name: controlAttrs.name || "",
+            id: controlAttrs.id || "",
+            text,
+            checked: /\bchecked\b/i.test(raw),
+            disabled: /\bdisabled\b/i.test(raw),
+            valueKind: valueKind(controlAttrs.value || ""),
+            hasValue: Boolean(controlAttrs.value),
+          };
+        })
+        .filter((control) => control.name || control.id || control.text)
+        .slice(0, 80);
+
+      return {
+        id: attrs.id || "",
+        name: attrs.name || "",
+        action: absoluteUrl(attrs.action || baseUrl, baseUrl),
+        method: (attrs.method || "get").toUpperCase(),
+        controls,
+        participantIndexes: [
+          ...new Set(
+            controls
+              .map((control) =>
+                control.name.match(/ParticipantsFamily\.FamilyMembers\[(\d+)\]/)?.[1],
+              )
+              .filter(Boolean),
+          ),
+        ],
+      };
+    });
+}
+
 function extractRegisterHints(html, baseUrl) {
   return {
     title: pageTitle(html),
@@ -315,6 +381,7 @@ function extractRegisterHints(html, baseUrl) {
     links: extractLinks(html, baseUrl),
     apiHints: extractApiHints(html, baseUrl),
     hiddenInputs: extractHiddenInputs(html),
+    formDetails: extractFormDetails(html, baseUrl),
   };
 }
 

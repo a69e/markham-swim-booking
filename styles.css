@@ -403,6 +403,16 @@ summary {
   color: #3f8ac4;
 }
 
+.session-action button.queued,
+.session-action button:disabled.queued {
+  background: var(--disabled);
+  color: #69696b;
+}
+
+.session-action button:disabled {
+  cursor: default;
+}
+
 .load-trigger {
   min-height: 34px;
   padding: 10px 12px 20px;

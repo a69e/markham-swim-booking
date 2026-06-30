@@ -318,20 +318,21 @@ function renderSessions() {
     const buttonClass = actionClass(session.action);
     const queueKey = queuedSessionKey(session);
     const isRegistered = registeredKeys.has(queueKey);
+    const isQueued = queuedKeys.has(queueKey);
     button.textContent = isRegistered
       ? "Registered"
       : isRegisterAction(session.action)
       ? "Register"
-      : queuedKeys.has(queueKey)
+      : isQueued
         ? "Queued"
         : "Queue";
-    button.className = actionClass(session.action);
-    button.disabled = buttonClass === "full" || isRegistered;
-    if (!isRegistered && isRegisterAction(session.action) && session.url) {
+    button.className = isQueued ? "queued" : buttonClass;
+    button.disabled = buttonClass === "full" || isRegistered || isQueued;
+    if (!isRegistered && !isQueued && isRegisterAction(session.action) && session.url) {
       button.addEventListener("click", () => {
         window.location.href = session.url;
       });
-    } else if (buttonClass !== "full") {
+    } else if (!isQueued && buttonClass !== "full") {
       button.addEventListener("click", async () => {
         const previousText = button.textContent;
         button.textContent = "Saving...";
@@ -340,6 +341,8 @@ function renderSessions() {
         try {
           await saveQueuedSession(session);
           button.textContent = "Queued";
+          button.className = "queued";
+          button.disabled = true;
         } catch {
           queueApiAvailable = false;
           button.textContent = "Queue failed";

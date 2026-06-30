@@ -4,6 +4,20 @@ import { ensureQueueSchema, getSql } from "./db.js";
 
 const BASE_URL = "https://cityofmarkham.perfectmind.com";
 const DEFAULT_DRY_RUN = true;
+const MONTHS = {
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
+};
 
 function validateDeviceId(deviceId) {
   if (typeof deviceId !== "string" || deviceId.length < 8) {
@@ -238,6 +252,85 @@ function sessionSummary(row) {
   };
 }
 
+function parseClock(value) {
+  const match = String(value || "")
+    .trim()
+    .match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const meridiem = match[3].toLowerCase();
+  if (meridiem === "pm" && hour !== 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  return { hour, minute };
+}
+
+function markhamOffsetHours(monthIndex) {
+  return monthIndex >= 2 && monthIndex <= 10 ? 4 : 5;
+}
+
+function markhamDateToIso(year, monthIndex, day, clock) {
+  const utcHour = clock.hour + markhamOffsetHours(monthIndex);
+  return new Date(Date.UTC(year, monthIndex, day, utcHour, clock.minute)).toISOString();
+}
+
+function inferSessionTimes(session) {
+  if (!session) return { startAt: null, endAt: null };
+  const startDate = session.startDateTime ? new Date(session.startDateTime) : null;
+  const endDate = session.endDateTime ? new Date(session.endDateTime) : null;
+  if (
+    startDate &&
+    endDate &&
+    !Number.isNaN(startDate.getTime()) &&
+    !Number.isNaN(endDate.getTime())
+  ) {
+    return { startAt: startDate.toISOString(), endAt: endDate.toISOString() };
+  }
+
+  const dateMatch = String(session.date || "").match(
+    /\b([A-Za-z]{3})\w*\s+(\d{1,2})(?:st|nd|rd|th)?,\s+(\d{4})\b/,
+  );
+  const timeMatch = String(session.timeRange || "").match(
+    /(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*-\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm))/i,
+  );
+  if (!dateMatch || !timeMatch) return { startAt: null, endAt: null };
+
+  const monthIndex = MONTHS[dateMatch[1].slice(0, 3).toLowerCase()];
+  const day = Number(dateMatch[2]);
+  const year = Number(dateMatch[3]);
+  const startClock = parseClock(timeMatch[1]);
+  const endClock = parseClock(timeMatch[2]);
+  if (monthIndex === undefined || !startClock || !endClock) {
+    return { startAt: null, endAt: null };
+  }
+
+  let startAt = markhamDateToIso(year, monthIndex, day, startClock);
+  let endAt = markhamDateToIso(year, monthIndex, day, endClock);
+  if (new Date(endAt) <= new Date(startAt)) {
+    endAt = markhamDateToIso(year, monthIndex, day + 1, endClock);
+  }
+
+  return { startAt, endAt };
+}
+
+async function backfillSessionTimes(db, row, inferredTimes) {
+  if (!inferredTimes.startAt && !inferredTimes.endAt) return;
+  if (row.start_at && row.end_at) return;
+
+  await db`
+    update queued_sessions
+    set
+      start_at = coalesce(start_at, ${inferredTimes.startAt}),
+      end_at = coalesce(end_at, ${inferredTimes.endAt}),
+      updated_at = now()
+    where id = ${row.id}
+  `;
+
+  row.start_at = row.start_at || inferredTimes.startAt;
+  row.end_at = row.end_at || inferredTimes.endAt;
+}
+
 async function markAttempt(db, id, message) {
   await db`
     update queued_sessions
@@ -280,10 +373,25 @@ async function selectQueuedSession(db, deviceId, requestedKey) {
         order by
           start_at nulls last,
           created_at
-        limit 1
+        limit 30
       `;
 
-  return rows[0] || null;
+  const now = new Date();
+  const expired = [];
+  for (const row of rows) {
+    const inferredTimes = inferSessionTimes(row.session);
+    await backfillSessionTimes(db, row, inferredTimes);
+
+    if (row.end_at && new Date(row.end_at) < now) {
+      await markExpired(db, row.id);
+      expired.push(sessionSummary(row));
+      continue;
+    }
+
+    return { queued: row, expired };
+  }
+
+  return { queued: null, expired };
 }
 
 export default async function handler(request, response) {
@@ -304,21 +412,12 @@ export default async function handler(request, response) {
       request.query.dryRun === undefined
         ? DEFAULT_DRY_RUN
         : request.query.dryRun !== "false";
-    const queued = await selectQueuedSession(db, deviceId, request.query.key);
+    const selection = await selectQueuedSession(db, deviceId, request.query.key);
+    const queued = selection.queued;
     if (!queued) {
-      response.status(404).json({ error: "No queued session found for this device." });
-      return;
-    }
-
-    const now = new Date();
-    if (queued.end_at && new Date(queued.end_at) < now) {
-      await markExpired(db, queued.id);
-      response.status(200).json({
-        ok: true,
-        dryRun,
-        expired: true,
-        message: "This queued session has already ended.",
-        queued: sessionSummary(queued),
+      response.status(404).json({
+        error: "No active queued session found for this device.",
+        expired: selection.expired,
       });
       return;
     }
@@ -368,6 +467,7 @@ export default async function handler(request, response) {
       dryRun,
       liveRegistrationEnabled: supportedLiveRegistration && !dryRun,
       message,
+      expiredSkipped: selection.expired,
       queued: sessionSummary(queued),
       login: {
         ok: true,

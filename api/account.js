@@ -7,9 +7,11 @@ const BOOKING_URL =
   "?calendarId=39bd5c76-e07f-43f3-af24-c6969091dbb4" +
   "&widgetId=6825ea71-e5b7-4c2a-948f-9195507ad90a&embed=False";
 const LOGIN_PATH = "/Clients/MemberRegistration/MemberSignIn";
-const LOGIN_URL =
-  `${BASE_URL}${LOGIN_PATH}?returnUrl=${encodeURIComponent(BOOKING_URL)}`;
 const CONTACT_URL = `${BASE_URL}/Clients/Contact`;
+
+function loginUrl(returnUrl = BOOKING_URL) {
+  return `${BASE_URL}${LOGIN_PATH}?returnUrl=${encodeURIComponent(returnUrl)}`;
+}
 
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
@@ -213,8 +215,9 @@ export async function fetchFullName(cookie) {
   return "";
 }
 
-export async function verifyPerfectMindLogin(email, password) {
-  const loginResponse = await fetch(LOGIN_URL, {
+export async function verifyPerfectMindLogin(email, password, returnUrl = BOOKING_URL) {
+  const url = loginUrl(returnUrl);
+  const loginResponse = await fetch(url, {
     headers: {
       Accept: "text/html",
       "User-Agent": "Mozilla/5.0",
@@ -229,7 +232,7 @@ export async function verifyPerfectMindLogin(email, password) {
   const token = extractToken(html);
   const body = new URLSearchParams({
     __RequestVerificationToken: token,
-    returnUrl: BOOKING_URL,
+    returnUrl,
     username: email,
     password,
     bsubmit: "Login",
@@ -243,7 +246,7 @@ export async function verifyPerfectMindLogin(email, password) {
       "Content-Type": "application/x-www-form-urlencoded",
       Cookie: cookieHeader(loginCookies),
       Origin: BASE_URL,
-      Referer: LOGIN_URL,
+      Referer: url,
       "User-Agent": "Mozilla/5.0",
     },
     body,
@@ -270,6 +273,7 @@ export async function verifyPerfectMindLogin(email, password) {
 
   return {
     verifiedAt: new Date().toISOString(),
+    returnUrl,
     location,
     finalUrl: redirectResult.finalUrl,
     redirects: redirectResult.redirects,

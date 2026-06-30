@@ -3,6 +3,7 @@ import { verifyPerfectMindLogin } from "./account.js";
 import { ensureQueueSchema, getSql } from "./db.js";
 
 const BASE_URL = "https://cityofmarkham.perfectmind.com";
+const CONTACT_URL = `${BASE_URL}/Clients/Contact`;
 const PROBE_PATHS = [
   "/Clients/Contact",
   "/Clients/BookMe4",
@@ -285,6 +286,8 @@ export default async function handler(request, response) {
     const session = JSON.parse(sessionText);
     let freshLogin = null;
     let freshLoginError = "";
+    let contactLogin = null;
+    let contactLoginError = "";
     let cookie = session.cookie || "";
 
     try {
@@ -295,11 +298,23 @@ export default async function handler(request, response) {
       });
       freshLogin = await verifyPerfectMindLogin(rows[0].email, password);
       cookie = freshLogin.cookie || cookie;
+      try {
+        contactLogin = await verifyPerfectMindLogin(
+          rows[0].email,
+          password,
+          CONTACT_URL,
+        );
+        cookie = contactLogin.cookie || cookie;
+      } catch (error) {
+        contactLoginError = error.message;
+      }
       const encryptedSession = encryptText(JSON.stringify(freshLogin));
       await db`
         update account_credentials
         set
-          full_name = coalesce(${freshLogin.fullName || null}, full_name),
+          full_name = coalesce(${
+            contactLogin?.fullName || freshLogin.fullName || null
+          }, full_name),
           session = ${JSON.stringify({
             cipher: encryptedSession.cipher,
             iv: encryptedSession.iv,
@@ -327,7 +342,8 @@ export default async function handler(request, response) {
     response.status(200).json({
       ok: true,
       email: maskEmail(rows[0].email),
-      storedFullName: freshLogin?.fullName || rows[0].full_name || "",
+      storedFullName:
+        contactLogin?.fullName || freshLogin?.fullName || rows[0].full_name || "",
       savedSessionVerifiedAt: savedSession.verifiedAt || session.verifiedAt || null,
       freshLogin: {
         ok: Boolean(freshLogin),
@@ -335,6 +351,13 @@ export default async function handler(request, response) {
         finalUrl: freshLogin?.finalUrl || "",
         redirects: freshLogin?.redirects || [],
         error: freshLoginError,
+      },
+      contactLogin: {
+        ok: Boolean(contactLogin),
+        fullName: contactLogin?.fullName || "",
+        finalUrl: contactLogin?.finalUrl || "",
+        redirects: contactLogin?.redirects || [],
+        error: contactLoginError,
       },
       probes,
     });

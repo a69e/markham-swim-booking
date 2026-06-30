@@ -33,6 +33,8 @@ function bookingUrl(item) {
 
 function normalizeClass(item) {
   return {
+    eventId: item.EventId || "",
+    occurrenceDate: item.OccurrenceDate || "",
     service: item.EventName || "Swimming",
     date: item.FormattedStartDate || "",
     timeRange: item.EventTimeDescription || "",
@@ -40,6 +42,8 @@ function normalizeClass(item) {
     facility: item.Facility || "",
     spots: item.Spots || "",
     action: item.BookButtonText || item.ClosedButtonName || "More info",
+    startDateTime: item.StartDate || item.StartDateTime || item.Start || "",
+    endDateTime: item.EndDate || item.EndDateTime || item.End || "",
     url: bookingUrl(item),
   };
 }

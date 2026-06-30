@@ -19,6 +19,11 @@ create table if not exists queued_sessions (
   session_key text not null,
   session jsonb not null,
   status text not null default 'queued',
+  start_at timestamptz,
+  end_at timestamptz,
+  registered_at timestamptz,
+  last_attempt_at timestamptz,
+  last_error text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (device_id, session_key)

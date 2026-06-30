@@ -37,6 +37,11 @@ export async function ensureQueueSchema() {
       session_key text not null,
       session jsonb not null,
       status text not null default 'queued',
+      start_at timestamptz,
+      end_at timestamptz,
+      registered_at timestamptz,
+      last_attempt_at timestamptz,
+      last_error text,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now(),
       unique (device_id, session_key)
@@ -46,6 +51,15 @@ export async function ensureQueueSchema() {
   await db`
     alter table queued_sessions
     add column if not exists account_id bigint references account_credentials(id) on delete set null
+  `;
+
+  await db`
+    alter table queued_sessions
+    add column if not exists start_at timestamptz,
+    add column if not exists end_at timestamptz,
+    add column if not exists registered_at timestamptz,
+    add column if not exists last_attempt_at timestamptz,
+    add column if not exists last_error text
   `;
 
   await db`

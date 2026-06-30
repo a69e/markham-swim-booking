@@ -95,10 +95,17 @@ function stripTags(value) {
 function cleanName(value) {
   const cleaned = stripTags(value)
     .replace(/^(welcome|hello|hi),?\s+/i, "")
-    .replace(/\s+(my account|my info|logout)$/i, "")
+    .replace(/\s+(my account|my info|logout|login)$/i, "")
     .trim();
 
-  if (!cleaned || cleaned.includes("@") || cleaned.length > 80) return "";
+  if (
+    !cleaned ||
+    cleaned.includes("@") ||
+    cleaned.length > 80 ||
+    /^(my account|my info|logout|login|swimming|contact|profile)$/i.test(cleaned)
+  ) {
+    return "";
+  }
   return cleaned;
 }
 
@@ -106,8 +113,8 @@ function extractFullName(html) {
   const patterns = [
     /id=["'](?:Contact_FullName|FullName|fullName)["'][^>]*value=["']([^"']+)["']/i,
     /name=["'](?:FullName|fullName)["'][^>]*value=["']([^"']+)["']/i,
+    /id=["']OptionsSelector["'][\s\S]*?<li[^>]*class=["'][^"']*global_menu[^"']*["'][\s\S]*?<span[^>]*class=["'][^"']*k-link[^"']*["'][^>]*>([\s\S]*?)<\/span>/i,
     /class=["'][^"']*(?:member-name|contact-name|user-name|profile-name)[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i,
-    /<h1[^>]*>([\s\S]*?)<\/h1>/i,
   ];
 
   for (const pattern of patterns) {
@@ -123,26 +130,39 @@ function extractFullName(html) {
   const lastNameMatch = html.match(
     /(?:name|id)=["'][^"']*(?:LastName|lastName)[^"']*["'][^>]*value=["']([^"']+)["']/i,
   );
+  const labelledFirstNameMatch = html.match(
+    /<label[^>]*>[^<]*First Name[^<]*<\/label>[\s\S]{0,500}?<input[^>]*value=["']([^"']+)["']/i,
+  );
+  const labelledLastNameMatch = html.match(
+    /<label[^>]*>[^<]*Last Name[^<]*<\/label>[\s\S]{0,500}?<input[^>]*value=["']([^"']+)["']/i,
+  );
   const fullName = cleanName(
-    `${firstNameMatch?.[1] || ""} ${lastNameMatch?.[1] || ""}`,
+    `${firstNameMatch?.[1] || labelledFirstNameMatch?.[1] || ""} ${
+      lastNameMatch?.[1] || labelledLastNameMatch?.[1] || ""
+    }`,
   );
 
   return fullName;
 }
 
 async function fetchFullName(cookie) {
-  const contactResponse = await fetch(CONTACT_URL, {
-    headers: {
-      Accept: "text/html",
-      Cookie: cookie,
-      "User-Agent": "Mozilla/5.0",
-    },
-  });
+  for (const url of [CONTACT_URL, BOOKING_URL]) {
+    const pageResponse = await fetch(url, {
+      headers: {
+        Accept: "text/html",
+        Cookie: cookie,
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
 
-  if (!contactResponse.ok) return "";
-  const html = await contactResponse.text();
-  if (html.includes("MemberSignIn") && html.includes("textBoxPassword")) return "";
-  return extractFullName(html);
+    if (!pageResponse.ok) continue;
+    const html = await pageResponse.text();
+    if (html.includes("MemberSignIn") && html.includes("textBoxPassword")) continue;
+    const fullName = extractFullName(html);
+    if (fullName) return fullName;
+  }
+
+  return "";
 }
 
 async function verifyPerfectMindLogin(email, password) {

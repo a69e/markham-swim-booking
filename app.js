@@ -8,12 +8,17 @@ let nextKey = null;
 let hasMore = true;
 let isLoadingMore = false;
 let queuedKeys = new Set();
+let registeredKeys = new Set();
+let sessionStatuses = new Map();
+let trackedSessions = [];
 let queueApiAvailable = true;
 
 const locationOptions = document.querySelector("#locationOptions");
 const serviceOptions = document.querySelector("#serviceOptions");
 const locationSummary = document.querySelector("#locationSummary");
 const serviceSummary = document.querySelector("#serviceSummary");
+const queuedOnlyToggle = document.querySelector("#queuedOnlyToggle");
+const registeredOnlyToggle = document.querySelector("#registeredOnlyToggle");
 const sessionList = document.querySelector("#sessionList");
 const resultCount = document.querySelector("#resultCount");
 const loadTrigger = document.querySelector("#loadTrigger");
@@ -82,14 +87,32 @@ function updateSummaries() {
 function getFilteredSessions() {
   const selectedLocations = selectedValues(locationOptions);
   const selectedServices = selectedValues(serviceOptions);
+  const onlyQueued = queuedOnlyToggle.checked;
+  const onlyRegistered = registeredOnlyToggle.checked;
+  const sourceSessions = [...sessions];
 
-  return sessions.filter((session) => {
+  if (onlyQueued || onlyRegistered) {
+    const seen = new Set(sourceSessions.map(queuedSessionKey));
+    trackedSessions.forEach((session) => {
+      const key = queuedSessionKey(session);
+      if (seen.has(key)) return;
+      seen.add(key);
+      sourceSessions.push(session);
+    });
+  }
+
+  return sourceSessions.filter((session) => {
+    const key = queuedSessionKey(session);
     const locationMatch =
       selectedLocations.length === 0 ||
       selectedLocations.includes(session.location);
     const serviceMatch =
       selectedServices.length === 0 || selectedServices.includes(session.service);
-    return locationMatch && serviceMatch;
+    const statusMatch =
+      (!onlyQueued && !onlyRegistered) ||
+      (onlyQueued && queuedKeys.has(key)) ||
+      (onlyRegistered && registeredKeys.has(key));
+    return locationMatch && serviceMatch && statusMatch;
   });
 }
 
@@ -119,13 +142,29 @@ function deviceId() {
 
 async function loadQueuedSessions() {
   queuedKeys = new Set();
+  registeredKeys = new Set();
+  sessionStatuses = new Map();
+  trackedSessions = [];
 
   try {
     const params = new URLSearchParams({ deviceId: deviceId() });
     const response = await fetch(`./api/queue?${params}`, { cache: "no-store" });
     if (!response.ok) throw new Error("Queue API failed.");
     const data = await response.json();
-    (data.queued || []).forEach((item) => queuedKeys.add(item.session_key));
+    (data.queued || []).forEach((item) => {
+      const sessionEndedAt = item.end_at ? new Date(item.end_at) : null;
+      const sessionIsPast =
+        sessionEndedAt && !Number.isNaN(sessionEndedAt.getTime()) && sessionEndedAt < new Date();
+      sessionStatuses.set(item.session_key, item.status);
+      if (item.status === "registered") {
+        registeredKeys.add(item.session_key);
+      } else if (item.status === "queued") {
+        queuedKeys.add(item.session_key);
+      }
+      if (!sessionIsPast && (item.status === "queued" || item.status === "registered")) {
+        trackedSessions.push(item.session);
+      }
+    });
     queueApiAvailable = true;
   } catch {
     queueApiAvailable = false;
@@ -145,7 +184,9 @@ async function saveQueuedSession(session) {
   }
 
   const data = await response.json();
-  queuedKeys.add(data.key || queuedSessionKey(session));
+  const key = data.key || queuedSessionKey(session);
+  queuedKeys.add(key);
+  sessionStatuses.set(key, "queued");
   queueApiAvailable = true;
 }
 
@@ -270,14 +311,17 @@ function renderSessions() {
     const button = row.querySelector("button");
     const buttonClass = actionClass(session.action);
     const queueKey = queuedSessionKey(session);
-    button.textContent = isRegisterAction(session.action)
+    const isRegistered = registeredKeys.has(queueKey);
+    button.textContent = isRegistered
+      ? "Registered"
+      : isRegisterAction(session.action)
       ? "Register"
       : queuedKeys.has(queueKey)
         ? "Queued"
         : "Queue";
     button.className = actionClass(session.action);
-    button.disabled = buttonClass === "full";
-    if (isRegisterAction(session.action) && session.url) {
+    button.disabled = buttonClass === "full" || isRegistered;
+    if (!isRegistered && isRegisterAction(session.action) && session.url) {
       button.addEventListener("click", () => {
         window.location.href = session.url;
       });
@@ -371,6 +415,8 @@ function resetVisibleList() {
 
 locationOptions.addEventListener("change", resetVisibleList);
 serviceOptions.addEventListener("change", resetVisibleList);
+queuedOnlyToggle.addEventListener("change", resetVisibleList);
+registeredOnlyToggle.addEventListener("change", resetVisibleList);
 
 function openAccountDialog() {
   accountDropdown.hidden = true;

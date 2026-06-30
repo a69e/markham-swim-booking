@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap");
-
 :root {
   --page: #f2f2f2;
   --surface: #ffffff;
@@ -22,7 +20,7 @@ body {
   min-height: 100vh;
   background: var(--page);
   color: var(--ink);
-  font-family: "Open Sans", Arial, sans-serif;
+  font-family: -apple-system, system-ui, "Segoe UI", Arial, Helvetica, Roboto, sans-serif;
 }
 
 button,
@@ -151,6 +149,57 @@ summary {
   padding: 14px 12px 12px;
   background: #fbfbfb;
   border-bottom: 1px solid var(--line);
+}
+
+.status-filters {
+  display: flex;
+  gap: 14px;
+  padding: 9px 12px;
+  background: #fbfbfb;
+  border-bottom: 1px solid var(--line);
+}
+
+.status-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  color: #302d3b;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.status-toggle input {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  appearance: none;
+  background: #e1e2e8;
+  cursor: pointer;
+}
+
+.status-toggle input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: transform 150ms ease;
+}
+
+.status-toggle input:checked {
+  background: #2b7ab1;
+}
+
+.status-toggle input:checked::after {
+  transform: translateX(16px);
 }
 
 .multi-filter {

@@ -293,17 +293,26 @@ export default async function handler(request, response) {
       validateDeviceId(deviceId);
 
       const rows = await db`
-        select email, full_name, updated_at
+        select
+          account_credentials.email,
+          account_credentials.full_name,
+          account_credentials.updated_at,
+          account_attendees.full_name as attendee_name
         from account_credentials
-        where device_id = ${deviceId}
+        left join account_attendees
+          on account_attendees.id = account_credentials.default_attendee_id
+        where account_credentials.device_id = ${deviceId}
         limit 1
       `;
 
+      const displayName = rows[0]?.attendee_name || rows[0]?.full_name || "";
       response.setHeader("Cache-Control", "no-store");
       response.status(200).json({
         hasAccount: rows.length > 0,
         email: rows[0]?.email || "",
         fullName: rows[0]?.full_name || "",
+        displayName,
+        defaultAttendeeName: rows[0]?.attendee_name || "",
         updatedAt: rows[0]?.updated_at || null,
         encryptionConfigured: encryptionConfigured(),
       });
@@ -353,7 +362,7 @@ export default async function handler(request, response) {
         on conflict (device_id)
         do update set
           email = excluded.email,
-          full_name = excluded.full_name,
+          full_name = coalesce(excluded.full_name, account_credentials.full_name),
           password_cipher = excluded.password_cipher,
           password_iv = excluded.password_iv,
           password_tag = excluded.password_tag,
@@ -362,11 +371,25 @@ export default async function handler(request, response) {
           updated_at = now()
       `;
 
+      const displayRows = await db`
+        select
+          account_credentials.full_name,
+          account_attendees.full_name as attendee_name
+        from account_credentials
+        left join account_attendees
+          on account_attendees.id = account_credentials.default_attendee_id
+        where account_credentials.device_id = ${body.deviceId}
+        limit 1
+      `;
+      const displayName =
+        displayRows[0]?.attendee_name || displayRows[0]?.full_name || "";
+
       response.status(200).json({
         ok: true,
         hasAccount: true,
         email: body.email.trim(),
-        fullName: loginSession.fullName,
+        fullName: displayRows[0]?.full_name || loginSession.fullName || "",
+        displayName,
       });
       return;
     }

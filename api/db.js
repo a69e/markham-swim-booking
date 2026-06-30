@@ -66,4 +66,30 @@ export async function ensureQueueSchema() {
     alter table account_credentials
     add column if not exists full_name text
   `;
+
+  await db`
+    create table if not exists account_attendees (
+      id bigserial primary key,
+      account_id bigint not null references account_credentials(id) on delete cascade,
+      member_id text not null,
+      account_member_id text,
+      full_name text not null,
+      family_membership text,
+      price_type_id text,
+      price_name text,
+      price_display text,
+      price_amount numeric,
+      is_owner boolean not null default false,
+      has_free_pass boolean not null default false,
+      is_default boolean not null default false,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique (account_id, member_id)
+    )
+  `;
+
+  await db`
+    alter table account_credentials
+    add column if not exists default_attendee_id bigint references account_attendees(id) on delete set null
+  `;
 }

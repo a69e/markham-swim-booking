@@ -31,6 +31,7 @@ const accountDropdown = document.querySelector("#accountDropdown");
 const accountManage = document.querySelector("#accountManage");
 const accountDebug = document.querySelector("#accountDebug");
 const accountProbe = document.querySelector("#accountProbe");
+const attendeeMenu = document.querySelector("#attendeeMenu");
 const accountLogout = document.querySelector("#accountLogout");
 const accountForm = document.querySelector("#accountForm");
 const accountClose = document.querySelector("#accountClose");
@@ -38,6 +39,7 @@ const accountEmail = document.querySelector("#accountEmail");
 const accountPassword = document.querySelector("#accountPassword");
 const accountStatus = document.querySelector("#accountStatus");
 let accountSaved = false;
+let attendees = [];
 
 function uniqueValues(key) {
   return [...new Set(sessions.map((session) => session[key]).filter(Boolean))]
@@ -210,6 +212,78 @@ function updateAccountButton(hasAccount, email = "", fullName = "") {
   accountMenu.classList.toggle("saved", hasAccount);
 }
 
+function attendeeSubtitle(attendee) {
+  if (attendee.hasFreePass) return "Pass";
+  if (attendee.priceDisplay) return attendee.priceDisplay;
+  if (attendee.isOwner) return "You";
+  return "";
+}
+
+function renderAttendeeMenu() {
+  attendeeMenu.replaceChildren();
+  attendeeMenu.hidden = attendees.length === 0;
+  if (attendees.length === 0) return;
+
+  const heading = document.createElement("div");
+  heading.className = "attendee-menu-heading";
+  heading.textContent = "Attendee";
+  attendeeMenu.append(heading);
+
+  attendees.forEach((attendee) => {
+    const button = document.createElement("button");
+    const name = document.createElement("span");
+    const meta = document.createElement("small");
+
+    button.type = "button";
+    button.className = "attendee-menu-item";
+    button.dataset.selected = attendee.isDefault ? "true" : "false";
+    name.textContent = attendee.name;
+    meta.textContent = attendeeSubtitle(attendee);
+
+    button.append(name, meta);
+    button.addEventListener("click", () => selectAttendee(attendee.id));
+    attendeeMenu.append(button);
+  });
+}
+
+async function loadAttendees() {
+  if (!accountSaved) {
+    attendees = [];
+    renderAttendeeMenu();
+    return;
+  }
+
+  try {
+    const params = new URLSearchParams({ deviceId: deviceId() });
+    const response = await fetch(`./api/attendees?${params}`, { cache: "no-store" });
+    if (!response.ok) throw new Error("Attendee API failed.");
+    const data = await response.json();
+    attendees = data.attendees || [];
+    renderAttendeeMenu();
+  } catch {
+    attendees = [];
+    renderAttendeeMenu();
+  }
+}
+
+async function selectAttendee(attendeeId) {
+  const response = await fetch("./api/attendees", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceId: deviceId(), attendeeId }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) return;
+
+  attendees = attendees.map((attendee) => ({
+    ...attendee,
+    isDefault: String(attendee.id) === String(attendeeId),
+  }));
+  updateAccountButton(true, accountEmail.value, data.displayName);
+  renderAttendeeMenu();
+  accountDropdown.hidden = true;
+}
+
 async function loadAccountStatus() {
   try {
     const params = new URLSearchParams({ deviceId: deviceId() });
@@ -217,14 +291,17 @@ async function loadAccountStatus() {
     if (!response.ok) throw new Error("Account API failed.");
     const data = await response.json();
 
-    updateAccountButton(data.hasAccount, data.email, data.fullName);
+    updateAccountButton(data.hasAccount, data.email, data.displayName || data.fullName);
     accountEmail.value = data.email || "";
     setAccountMessage(
       data.hasAccount ? "Account saved for this device." : "",
       data.hasAccount ? "success" : "",
     );
+    loadAttendees();
   } catch {
     updateAccountButton(false);
+    attendees = [];
+    renderAttendeeMenu();
     setAccountMessage("Account database is not connected.", "error");
   }
 }
@@ -247,7 +324,8 @@ async function saveAccount(event) {
     if (!response.ok) throw new Error(data.error || "Unable to save account.");
 
     accountPassword.value = "";
-    updateAccountButton(true, data.email, data.fullName);
+    updateAccountButton(true, data.email, data.displayName || data.fullName);
+    loadAttendees();
     setAccountMessage("Login verified and saved.", "success");
     setTimeout(() => accountDialog.close(), 700);
   } catch (error) {
@@ -272,6 +350,8 @@ async function logoutAccount() {
   accountEmail.value = "";
   accountPassword.value = "";
   updateAccountButton(false);
+  attendees = [];
+  renderAttendeeMenu();
 }
 
 function renderSessions() {

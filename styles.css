@@ -142,6 +142,44 @@ summary {
   background: #eaeaea;
 }
 
+.attendee-menu {
+  border-top: 1px solid #eeeeee;
+  border-bottom: 1px solid #eeeeee;
+  background: #ffffff;
+}
+
+.attendee-menu-heading {
+  padding: 8px 12px 3px;
+  color: #69696b;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.attendee-menu-item {
+  display: grid;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 12px;
+  border: 0;
+  background: #ffffff;
+  color: #333333;
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.attendee-menu-item small {
+  color: #69696b;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.attendee-menu-item[data-selected="true"],
+.attendee-menu-item:hover,
+.attendee-menu-item:focus {
+  background: #eaeaea;
+}
+
 .filters {
   display: grid;
   grid-template-columns: 1fr 1fr;

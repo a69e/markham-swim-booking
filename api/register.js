@@ -404,6 +404,147 @@ function extractFormDetails(html, baseUrl) {
     });
 }
 
+function extractPriceMap(html) {
+  const priceMap = new Map();
+  for (const match of html.matchAll(/"Prices":(\[[\s\S]*?\])[,}]/g)) {
+    try {
+      const prices = JSON.parse(match[1]);
+      prices.forEach((price) => {
+        if (!price.PriceTypeId) return;
+        priceMap.set(price.PriceTypeId, {
+          name: price.Name || "",
+          display: price.DisplayAmountOrAsFree || price.DisplayAmount || "",
+          amount:
+            typeof price.Amount === "number"
+              ? price.Amount
+              : Number(price.Amount || 0),
+        });
+      });
+    } catch {
+      // Some embedded price arrays are not standalone JSON fragments.
+    }
+  }
+  return priceMap;
+}
+
+function extractAttendeeRecords(html) {
+  const priceMap = extractPriceMap(html);
+  const records = [];
+  const memberPattern =
+    /name="ParticipantsFamily\.FamilyMembers\[(\d+)\]\.MemberId"[^>]*value="([^"]+)"[\s\S]*?name="ParticipantsFamily\.FamilyMembers\[\1\]\.AccountId"[^>]*value="([^"]*)"[\s\S]*?name="ParticipantsFamily\.FamilyMembers\[\1\]\.FullNameSimple"[^>]*value="([^"]+)"[\s\S]*?name="ParticipantsFamily\.FamilyMembers\[\1\]\.FamilyMembership"[^>]*value="([^"]*)"[\s\S]*?name="ParticipantsFamily\.FamilyMembers\[\1\]\.PriceTypeId"[^>]*value="([^"]*)"/g;
+
+  for (const match of html.matchAll(memberPattern)) {
+    const price = priceMap.get(match[6]) || {};
+    records.push({
+      index: match[1],
+      memberId: htmlDecode(match[2]),
+      accountMemberId: htmlDecode(match[3]),
+      fullName: htmlDecode(match[4]),
+      familyMembership: htmlDecode(match[5]),
+      priceTypeId: htmlDecode(match[6]),
+      priceName: price.name || "",
+      priceDisplay: price.display || "",
+      priceAmount: Number.isFinite(price.amount) ? price.amount : null,
+      isOwner: /^you$/i.test(htmlDecode(match[5])),
+      hasFreePass:
+        Number(price.amount) === 0 &&
+        /(pass|membership|free)/i.test(`${price.name || ""} ${price.display || ""}`),
+    });
+  }
+
+  return records;
+}
+
+async function saveAttendees(db, accountId, html) {
+  const attendees = extractAttendeeRecords(html);
+  if (!attendees.length) return [];
+
+  for (const attendee of attendees) {
+    await db`
+      insert into account_attendees (
+        account_id,
+        member_id,
+        account_member_id,
+        full_name,
+        family_membership,
+        price_type_id,
+        price_name,
+        price_display,
+        price_amount,
+        is_owner,
+        has_free_pass,
+        is_default
+      )
+      values (
+        ${accountId},
+        ${attendee.memberId},
+        ${attendee.accountMemberId || null},
+        ${attendee.fullName},
+        ${attendee.familyMembership || null},
+        ${attendee.priceTypeId || null},
+        ${attendee.priceName || null},
+        ${attendee.priceDisplay || null},
+        ${attendee.priceAmount},
+        ${attendee.isOwner},
+        ${attendee.hasFreePass},
+        ${attendee.isOwner}
+      )
+      on conflict (account_id, member_id)
+      do update set
+        account_member_id = excluded.account_member_id,
+        full_name = excluded.full_name,
+        family_membership = excluded.family_membership,
+        price_type_id = excluded.price_type_id,
+        price_name = excluded.price_name,
+        price_display = excluded.price_display,
+        price_amount = excluded.price_amount,
+        is_owner = excluded.is_owner,
+        has_free_pass = excluded.has_free_pass,
+        is_default = case
+          when account_attendees.is_default then true
+          else excluded.is_default
+        end,
+        updated_at = now()
+    `;
+  }
+
+  const ownerRows = await db`
+    select id, full_name
+    from account_attendees
+    where account_id = ${accountId}
+      and is_owner = true
+    order by id
+    limit 1
+  `;
+  const existingDefaultRows = await db`
+    select id, full_name
+    from account_attendees
+    where account_id = ${accountId}
+      and is_default = true
+    order by id
+    limit 1
+  `;
+  const defaultRow = existingDefaultRows[0] || ownerRows[0] || null;
+
+  if (defaultRow) {
+    await db`
+      update account_attendees
+      set is_default = id = ${defaultRow.id},
+          updated_at = now()
+      where account_id = ${accountId}
+    `;
+    await db`
+      update account_credentials
+      set default_attendee_id = ${defaultRow.id},
+          full_name = ${defaultRow.full_name},
+          updated_at = now()
+      where id = ${accountId}
+    `;
+  }
+
+  return attendees;
+}
+
 function participantLabelFromControls(controls, index) {
   const name = controls.find(
     (control) =>
@@ -773,11 +914,13 @@ export default async function handler(request, response) {
         const formHints = formLogin?.html
           ? extractRegisterHints(formLogin.html, formLogin.finalUrl)
           : null;
+        const participantHtml = formLogin?.html || reloggedPage.html || "";
         const selectionPreview = buildParticipantSelectionPreview(
-          formLogin?.html || reloggedPage.html || "",
+          participantHtml,
           formLogin?.finalUrl || reloggedPage.finalUrl,
           participantIndex,
         );
+        const attendeeRecords = await saveAttendees(db, account.id, participantHtml);
         participantProbes.push({
           url,
           loginFinalUrl: participantLogin.finalUrl || "",
@@ -788,6 +931,7 @@ export default async function handler(request, response) {
           looksLoggedIn:
             formHints?.looksLoggedIn || directHints?.looksLoggedIn || false,
           hints: formHints || directHints,
+          attendeesSaved: attendeeRecords.length,
           selectionPreview,
           formLogin: formLogin
             ? {
@@ -801,6 +945,7 @@ export default async function handler(request, response) {
         continue;
       }
 
+      const directAttendees = await saveAttendees(db, account.id, directPage.html || "");
       participantProbes.push({
         url,
         loginFinalUrl: "",
@@ -810,6 +955,7 @@ export default async function handler(request, response) {
         redirects: directPage.redirects,
         looksLoggedIn: directHints?.looksLoggedIn || false,
         hints: directHints,
+        attendeesSaved: directAttendees.length,
         selectionPreview: buildParticipantSelectionPreview(
           directPage.html || "",
           directPage.finalUrl,

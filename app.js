@@ -116,6 +116,10 @@ function getFilteredSessions() {
   });
 }
 
+function statusFilterActive() {
+  return queuedOnlyToggle.checked || registeredOnlyToggle.checked;
+}
+
 function actionClass(action) {
   const normalized = action.toLowerCase();
   if (normalized.includes("register")) return "";
@@ -348,10 +352,10 @@ function renderSessions() {
     sessionList.append(row);
   });
 
-  loadTrigger.hidden = !hasMore && queueApiAvailable;
+  loadTrigger.hidden = statusFilterActive() || (!hasMore && queueApiAvailable);
   loadTrigger.textContent = !queueApiAvailable
     ? "Queue database is not connected."
-    : hasMore
+    : hasMore && !statusFilterActive()
       ? "Loading more..."
       : "";
 }
@@ -465,7 +469,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 async function loadMoreSessions() {
-  if (!hasMore || isLoadingMore || !nextKey) return;
+  if (statusFilterActive() || !hasMore || isLoadingMore || !nextKey) return;
   isLoadingMore = true;
   loadTrigger.textContent = "Loading more...";
 
@@ -484,7 +488,7 @@ async function loadMoreSessions() {
 }
 
 function loadMoreIfNeeded() {
-  if (!hasMore || isLoadingMore) return;
+  if (statusFilterActive() || !hasMore || isLoadingMore) return;
 
   const scrollPosition = window.scrollY + window.innerHeight;
   const triggerPosition = document.documentElement.scrollHeight - 500;

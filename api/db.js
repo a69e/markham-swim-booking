@@ -18,6 +18,7 @@ export async function ensureQueueSchema() {
       id bigserial primary key,
       device_id text not null unique,
       email text not null,
+      full_name text,
       password_cipher text not null,
       password_iv text not null,
       password_tag text not null,
@@ -45,5 +46,10 @@ export async function ensureQueueSchema() {
   await db`
     alter table queued_sessions
     add column if not exists account_id bigint references account_credentials(id) on delete set null
+  `;
+
+  await db`
+    alter table account_credentials
+    add column if not exists full_name text
   `;
 }

@@ -2,6 +2,7 @@ create table if not exists account_credentials (
   id bigserial primary key,
   device_id text not null unique,
   email text not null,
+  full_name text,
   password_cipher text not null,
   password_iv text not null,
   password_tag text not null,

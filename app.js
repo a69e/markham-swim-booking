@@ -154,9 +154,10 @@ function setAccountMessage(message, tone = "") {
   accountStatus.dataset.tone = tone;
 }
 
-function updateAccountButton(hasAccount, email = "") {
+function updateAccountButton(hasAccount, email = "", fullName = "") {
   accountSaved = hasAccount;
-  accountButton.textContent = hasAccount ? email || "My Account" : "Login";
+  const label = fullName || email || "My info";
+  accountButton.textContent = hasAccount ? label : "Login";
   accountButton.title = email || "Save account";
   accountButton.classList.toggle("saved", hasAccount);
   accountMenu.classList.toggle("saved", hasAccount);
@@ -169,7 +170,7 @@ async function loadAccountStatus() {
     if (!response.ok) throw new Error("Account API failed.");
     const data = await response.json();
 
-    updateAccountButton(data.hasAccount, data.email);
+    updateAccountButton(data.hasAccount, data.email, data.fullName);
     accountEmail.value = data.email || "";
     setAccountMessage(
       data.hasAccount ? "Account saved for this device." : "",
@@ -199,7 +200,7 @@ async function saveAccount(event) {
     if (!response.ok) throw new Error(data.error || "Unable to save account.");
 
     accountPassword.value = "";
-    updateAccountButton(true, data.email);
+    updateAccountButton(true, data.email, data.fullName);
     setAccountMessage("Login verified and saved.", "success");
     setTimeout(() => accountDialog.close(), 700);
   } catch (error) {
@@ -386,7 +387,9 @@ accountButton.addEventListener("click", () => {
   accountDropdown.hidden = !accountDropdown.hidden;
 });
 
-accountManage.addEventListener("click", openAccountDialog);
+accountManage.addEventListener("click", () => {
+  window.location.href = "https://cityofmarkham.perfectmind.com/Clients/Contact";
+});
 
 accountLogout.addEventListener("click", () => {
   logoutAccount();

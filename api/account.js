@@ -9,6 +9,7 @@ const BOOKING_URL =
 const LOGIN_PATH = "/Clients/MemberRegistration/MemberSignIn";
 const LOGIN_URL =
   `${BASE_URL}${LOGIN_PATH}?returnUrl=${encodeURIComponent(BOOKING_URL)}`;
+const CONTACT_URL = `${BASE_URL}/Clients/Contact`;
 
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
@@ -75,6 +76,75 @@ function cookieHeader(cookieValues) {
     .join("; ");
 }
 
+function htmlDecode(value) {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ");
+}
+
+function stripTags(value) {
+  return htmlDecode(value.replace(/<[^>]*>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanName(value) {
+  const cleaned = stripTags(value)
+    .replace(/^(welcome|hello|hi),?\s+/i, "")
+    .replace(/\s+(my account|my info|logout)$/i, "")
+    .trim();
+
+  if (!cleaned || cleaned.includes("@") || cleaned.length > 80) return "";
+  return cleaned;
+}
+
+function extractFullName(html) {
+  const patterns = [
+    /id=["'](?:Contact_FullName|FullName|fullName)["'][^>]*value=["']([^"']+)["']/i,
+    /name=["'](?:FullName|fullName)["'][^>]*value=["']([^"']+)["']/i,
+    /class=["'][^"']*(?:member-name|contact-name|user-name|profile-name)[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i,
+    /<h1[^>]*>([\s\S]*?)<\/h1>/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (!match) continue;
+    const name = cleanName(match[1]);
+    if (name) return name;
+  }
+
+  const firstNameMatch = html.match(
+    /(?:name|id)=["'][^"']*(?:FirstName|firstName)[^"']*["'][^>]*value=["']([^"']+)["']/i,
+  );
+  const lastNameMatch = html.match(
+    /(?:name|id)=["'][^"']*(?:LastName|lastName)[^"']*["'][^>]*value=["']([^"']+)["']/i,
+  );
+  const fullName = cleanName(
+    `${firstNameMatch?.[1] || ""} ${lastNameMatch?.[1] || ""}`,
+  );
+
+  return fullName;
+}
+
+async function fetchFullName(cookie) {
+  const contactResponse = await fetch(CONTACT_URL, {
+    headers: {
+      Accept: "text/html",
+      Cookie: cookie,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!contactResponse.ok) return "";
+  const html = await contactResponse.text();
+  if (html.includes("MemberSignIn") && html.includes("textBoxPassword")) return "";
+  return extractFullName(html);
+}
+
 async function verifyPerfectMindLogin(email, password) {
   const loginResponse = await fetch(LOGIN_URL, {
     headers: {
@@ -126,10 +196,14 @@ async function verifyPerfectMindLogin(email, password) {
     throw new Error("City of Markham login failed.");
   }
 
+  const cookie = cookieHeader(responseCookies);
+  const fullName = await fetchFullName(cookie);
+
   return {
     verifiedAt: new Date().toISOString(),
     location,
-    cookie: cookieHeader(responseCookies),
+    cookie,
+    fullName,
   };
 }
 
@@ -144,7 +218,7 @@ export default async function handler(request, response) {
       validateDeviceId(deviceId);
 
       const rows = await db`
-        select email, updated_at
+        select email, full_name, updated_at
         from account_credentials
         where device_id = ${deviceId}
         limit 1
@@ -154,6 +228,7 @@ export default async function handler(request, response) {
       response.status(200).json({
         hasAccount: rows.length > 0,
         email: rows[0]?.email || "",
+        fullName: rows[0]?.full_name || "",
         updatedAt: rows[0]?.updated_at || null,
         encryptionConfigured: encryptionConfigured(),
       });
@@ -178,6 +253,7 @@ export default async function handler(request, response) {
         insert into account_credentials (
           device_id,
           email,
+          full_name,
           password_cipher,
           password_iv,
           password_tag,
@@ -187,6 +263,7 @@ export default async function handler(request, response) {
         values (
           ${body.deviceId},
           ${body.email.trim()},
+          ${loginSession.fullName || null},
           ${encryptedPassword.cipher},
           ${encryptedPassword.iv},
           ${encryptedPassword.tag},
@@ -201,6 +278,7 @@ export default async function handler(request, response) {
         on conflict (device_id)
         do update set
           email = excluded.email,
+          full_name = excluded.full_name,
           password_cipher = excluded.password_cipher,
           password_iv = excluded.password_iv,
           password_tag = excluded.password_tag,
@@ -213,6 +291,7 @@ export default async function handler(request, response) {
         ok: true,
         hasAccount: true,
         email: body.email.trim(),
+        fullName: loginSession.fullName,
       });
       return;
     }

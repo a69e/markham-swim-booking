@@ -135,11 +135,19 @@ function extractFormHtml(html, id) {
   return formMatch ? formMatch[0] : "";
 }
 
+function formAction(formHtml, baseUrl) {
+  const formAttrs = extractAttributes(formHtml.match(/<form\b([^>]*)>/i)?.[1] || "");
+  return {
+    action: absoluteUrl(formAttrs.action || baseUrl, baseUrl),
+    method: (formAttrs.method || "get").toUpperCase(),
+  };
+}
+
 function extractLoginForm(html, baseUrl) {
   const formHtml = extractFormHtml(html, "logonform");
   if (!formHtml) return null;
 
-  const formAttrs = extractAttributes(formHtml.match(/<form\b([^>]*)>/i)?.[1] || "");
+  const { action } = formAction(formHtml, baseUrl);
   const body = new URLSearchParams();
 
   for (const match of formHtml.matchAll(/<input\b([^>]*)>/gi)) {
@@ -149,10 +157,7 @@ function extractLoginForm(html, baseUrl) {
   }
 
   return {
-    action: absoluteUrl(
-      formAttrs.action || "/SocialSite/MemberRegistration/MemberSignIn",
-      baseUrl,
-    ),
+    action: action || absoluteUrl("/SocialSite/MemberRegistration/MemberSignIn"),
     body,
   };
 }
@@ -348,10 +353,23 @@ function extractFormDetails(html, baseUrl) {
             disabled: /\bdisabled\b/i.test(raw),
             valueKind: valueKind(controlAttrs.value || ""),
             hasValue: Boolean(controlAttrs.value),
+            sampleValue: /\.FullNameSimple$/.test(controlAttrs.name || "")
+              ? safeText(controlAttrs.value || "", 80)
+              : "",
           };
         })
         .filter((control) => control.name || control.id || control.text)
         .slice(0, 80);
+
+      const participantIndexes = [
+        ...new Set(
+          controls
+            .map((control) =>
+              control.name.match(/ParticipantsFamily\.FamilyMembers\[(\d+)\]/)?.[1],
+            )
+            .filter(Boolean),
+        ),
+      ];
 
       return {
         id: attrs.id || "",
@@ -359,17 +377,102 @@ function extractFormDetails(html, baseUrl) {
         action: absoluteUrl(attrs.action || baseUrl, baseUrl),
         method: (attrs.method || "get").toUpperCase(),
         controls,
-        participantIndexes: [
-          ...new Set(
-            controls
-              .map((control) =>
-                control.name.match(/ParticipantsFamily\.FamilyMembers\[(\d+)\]/)?.[1],
-              )
-              .filter(Boolean),
-          ),
-        ],
+        participantIndexes,
+        participants: participantIndexes.map((index) => {
+          const prefix = `ParticipantsFamily.FamilyMembers[${index}]`;
+          const nameInput = controls.find(
+            (control) => control.name === `${prefix}.FullNameSimple`,
+          );
+          const memberInput = controls.find(
+            (control) => control.name === `${prefix}.MemberId`,
+          );
+          const checkbox = controls.find(
+            (control) =>
+              control.name === `${prefix}.IsParticipating` &&
+              control.type === "checkbox",
+          );
+
+          return {
+            index,
+            label: nameInput?.sampleValue || "",
+            memberValueKind: memberInput?.valueKind || "",
+            checked: checkbox?.checked || false,
+            disabled: checkbox?.disabled || false,
+          };
+        }),
       };
     });
+}
+
+function participantLabelFromControls(controls, index) {
+  const name = controls.find(
+    (control) =>
+      control.name === `ParticipantsFamily.FamilyMembers[${index}].FullNameSimple`,
+  );
+  return name?.sampleValue || "";
+}
+
+function buildParticipantSelectionPreview(html, baseUrl, selectedIndex) {
+  if (selectedIndex === undefined || selectedIndex === null || selectedIndex === "") {
+    return null;
+  }
+
+  const formHtml = extractFormHtml(html, "eventParticipantsSelection");
+  if (!formHtml) return null;
+
+  const details = extractFormDetails(html, baseUrl).find(
+    (form) => form.id === "eventParticipantsSelection",
+  );
+  const participantIndexes = details?.participantIndexes || [];
+  const selected = String(selectedIndex);
+  if (!participantIndexes.includes(selected)) {
+    return {
+      error: `Participant index ${selected} was not found.`,
+      participantIndexes,
+    };
+  }
+
+  const body = new URLSearchParams();
+  let selectedCheckbox = "";
+  let skippedCheckboxes = 0;
+
+  for (const match of formHtml.matchAll(/<input\b([^>]*)>/gi)) {
+    const attrs = extractAttributes(match[1]);
+    if (!attrs.name || /\bdisabled\b/i.test(match[0])) continue;
+
+    const type = (attrs.type || "text").toLowerCase();
+    const participantMatch = attrs.name.match(
+      /^ParticipantsFamily\.FamilyMembers\[(\d+)\]\.IsParticipating$/,
+    );
+
+    if (type === "checkbox") {
+      if (participantMatch?.[1] === selected) {
+        body.append(attrs.name, attrs.value || "true");
+        selectedCheckbox = attrs.name;
+      } else {
+        skippedCheckboxes += 1;
+      }
+      continue;
+    }
+
+    body.append(attrs.name, attrs.value || "");
+  }
+
+  const action = formAction(formHtml, baseUrl);
+  return {
+    action: action.action,
+    method: action.method,
+    selectedParticipantIndex: selected,
+    selectedParticipantLabel: participantLabelFromControls(
+      details?.controls || [],
+      selected,
+    ),
+    participantIndexes,
+    selectedCheckbox,
+    skippedCheckboxes,
+    fieldCount: [...body.keys()].length,
+    repeatedFieldCount: [...new Set([...body.keys()])].length,
+  };
 }
 
 function extractRegisterHints(html, baseUrl) {
@@ -636,6 +739,10 @@ export default async function handler(request, response) {
       socialSiteRegisterUrl(registerUrl),
     ]);
     const participantProbes = [];
+    const participantIndex =
+      typeof request.query.participantIndex === "string"
+        ? request.query.participantIndex
+        : "";
 
     for (const url of registerCandidates) {
       const directPage = await fetchHtmlWithRedirects(
@@ -666,6 +773,11 @@ export default async function handler(request, response) {
         const formHints = formLogin?.html
           ? extractRegisterHints(formLogin.html, formLogin.finalUrl)
           : null;
+        const selectionPreview = buildParticipantSelectionPreview(
+          formLogin?.html || reloggedPage.html || "",
+          formLogin?.finalUrl || reloggedPage.finalUrl,
+          participantIndex,
+        );
         participantProbes.push({
           url,
           loginFinalUrl: participantLogin.finalUrl || "",
@@ -676,6 +788,7 @@ export default async function handler(request, response) {
           looksLoggedIn:
             formHints?.looksLoggedIn || directHints?.looksLoggedIn || false,
           hints: formHints || directHints,
+          selectionPreview,
           formLogin: formLogin
             ? {
                 status: formLogin.response?.status || 0,
@@ -697,6 +810,11 @@ export default async function handler(request, response) {
         redirects: directPage.redirects,
         looksLoggedIn: directHints?.looksLoggedIn || false,
         hints: directHints,
+        selectionPreview: buildParticipantSelectionPreview(
+          directPage.html || "",
+          directPage.finalUrl,
+          participantIndex,
+        ),
         formLogin: null,
       });
     }

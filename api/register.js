@@ -128,6 +128,92 @@ function extractAttributes(attrs) {
   return values;
 }
 
+function extractFormHtml(html, id) {
+  const formMatch = html.match(
+    new RegExp(`<form\\b[^>]*id=["']${id}["'][\\s\\S]*?<\\/form>`, "i"),
+  );
+  return formMatch ? formMatch[0] : "";
+}
+
+function extractLoginForm(html, baseUrl) {
+  const formHtml = extractFormHtml(html, "logonform");
+  if (!formHtml) return null;
+
+  const formAttrs = extractAttributes(formHtml.match(/<form\b([^>]*)>/i)?.[1] || "");
+  const body = new URLSearchParams();
+
+  for (const match of formHtml.matchAll(/<input\b([^>]*)>/gi)) {
+    const attrs = extractAttributes(match[1]);
+    if (!attrs.name) continue;
+    body.set(attrs.name, attrs.value || "");
+  }
+
+  return {
+    action: absoluteUrl(
+      formAttrs.action || "/SocialSite/MemberRegistration/MemberSignIn",
+      baseUrl,
+    ),
+    body,
+  };
+}
+
+async function submitLoginForm(loginPage, email, password) {
+  const form = extractLoginForm(loginPage.html || "", loginPage.finalUrl);
+  if (!form) return null;
+
+  form.body.set("username", email);
+  form.body.set("password", password);
+  form.body.set("bsubmit", "Login");
+
+  const redirects = [];
+  let cookie = loginPage.cookie || "";
+  let currentUrl = form.action;
+  let response = await fetch(currentUrl, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      Accept: "text/html,application/xhtml+xml",
+      "Content-Type": "application/x-www-form-urlencoded",
+      Cookie: cookie,
+      Origin: BASE_URL,
+      Referer: loginPage.finalUrl,
+      "User-Agent": "Mozilla/5.0",
+    },
+    body: form.body,
+  });
+  cookie = mergeCookieHeader(cookie, response);
+
+  let html = "";
+  for (let index = 0; index < 8; index += 1) {
+    const location = response.headers.get("location") || "";
+    if (response.status < 300 || response.status >= 400 || !location) {
+      const contentType = response.headers.get("content-type") || "";
+      html = contentType.includes("text/html") ? await response.text() : "";
+      break;
+    }
+
+    currentUrl = absoluteUrl(location, currentUrl);
+    redirects.push(currentUrl);
+    response = await fetch(currentUrl, {
+      redirect: "manual",
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        Cookie: cookie,
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+    cookie = mergeCookieHeader(cookie, response);
+  }
+
+  return {
+    response,
+    finalUrl: currentUrl,
+    redirects,
+    html,
+    cookie,
+  };
+}
+
 function extractForms(html, baseUrl) {
   return [...html.matchAll(/<form\b([^>]*)>/gi)].slice(0, 12).map((match) => {
     const attrs = extractAttributes(match[1]);
@@ -506,15 +592,31 @@ export default async function handler(request, response) {
         directHints = reloggedPage.html
           ? extractRegisterHints(reloggedPage.html, reloggedPage.finalUrl)
           : null;
+        const formLogin =
+          !directHints?.looksLoggedIn
+            ? await submitLoginForm(reloggedPage, account.email, password)
+            : null;
+        const formHints = formLogin?.html
+          ? extractRegisterHints(formLogin.html, formLogin.finalUrl)
+          : null;
         participantProbes.push({
           url,
           loginFinalUrl: participantLogin.finalUrl || "",
           loginRedirects: participantLogin.redirects || [],
-          status: reloggedPage.response?.status || 0,
-          finalUrl: reloggedPage.finalUrl,
-          redirects: reloggedPage.redirects,
-          looksLoggedIn: directHints?.looksLoggedIn || false,
-          hints: directHints,
+          status: formLogin?.response?.status || reloggedPage.response?.status || 0,
+          finalUrl: formLogin?.finalUrl || reloggedPage.finalUrl,
+          redirects: formLogin?.redirects || reloggedPage.redirects,
+          looksLoggedIn:
+            formHints?.looksLoggedIn || directHints?.looksLoggedIn || false,
+          hints: formHints || directHints,
+          formLogin: formLogin
+            ? {
+                status: formLogin.response?.status || 0,
+                finalUrl: formLogin.finalUrl,
+                redirects: formLogin.redirects,
+                looksLoggedIn: formHints?.looksLoggedIn || false,
+              }
+            : null,
         });
         continue;
       }
@@ -528,6 +630,7 @@ export default async function handler(request, response) {
         redirects: directPage.redirects,
         looksLoggedIn: directHints?.looksLoggedIn || false,
         hints: directHints,
+        formLogin: null,
       });
     }
 

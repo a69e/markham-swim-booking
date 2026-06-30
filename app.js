@@ -150,7 +150,7 @@ function setAccountMessage(message, tone = "") {
 }
 
 function updateAccountButton(hasAccount, email = "") {
-  accountButton.textContent = hasAccount ? "Saved" : "Account";
+  accountButton.textContent = hasAccount ? "Saved" : "Login";
   accountButton.title = email || "Save account";
 }
 
@@ -164,7 +164,7 @@ async function loadAccountStatus() {
     updateAccountButton(data.hasAccount, data.email);
     accountEmail.value = data.email || "";
     setAccountMessage(
-      data.hasAccount ? "Account saved for this device." : "No account saved yet.",
+      data.hasAccount ? "Account saved for this device." : "",
       data.hasAccount ? "success" : "",
     );
   } catch {

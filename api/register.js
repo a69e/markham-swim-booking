@@ -243,6 +243,18 @@ function findRegisterUrl(hints) {
   ) || "";
 }
 
+function socialSiteRegisterUrl(registerUrl) {
+  if (!registerUrl) return "";
+  return registerUrl.replace(
+    "/Clients/BookMe4EventParticipants",
+    "/SocialSite/BookMe4EventParticipants",
+  );
+}
+
+function uniqueUrls(urls) {
+  return [...new Set(urls.filter(Boolean))];
+}
+
 function sessionSummary(row) {
   const session = row.session || {};
   return {
@@ -466,12 +478,58 @@ export default async function handler(request, response) {
           hiddenInputs: [],
         };
     const registerUrl = findRegisterUrl(hints);
-    const participantPage = registerUrl
-      ? await fetchHtmlWithRedirects(registerUrl, classPage.cookie || login.cookie)
-      : null;
-    const participantHints = participantPage?.html
-      ? extractRegisterHints(participantPage.html, participantPage.finalUrl)
-      : null;
+    const registerCandidates = uniqueUrls([
+      registerUrl,
+      socialSiteRegisterUrl(registerUrl),
+    ]);
+    const participantProbes = [];
+
+    for (const url of registerCandidates) {
+      const directPage = await fetchHtmlWithRedirects(
+        url,
+        classPage.cookie || login.cookie,
+      );
+      let directHints = directPage.html
+        ? extractRegisterHints(directPage.html, directPage.finalUrl)
+        : null;
+
+      if (!directHints?.looksLoggedIn) {
+        const participantLogin = await verifyPerfectMindLogin(
+          account.email,
+          password,
+          url,
+        );
+        const reloggedPage = await fetchHtmlWithRedirects(
+          url,
+          participantLogin.cookie,
+        );
+        directHints = reloggedPage.html
+          ? extractRegisterHints(reloggedPage.html, reloggedPage.finalUrl)
+          : null;
+        participantProbes.push({
+          url,
+          loginFinalUrl: participantLogin.finalUrl || "",
+          loginRedirects: participantLogin.redirects || [],
+          status: reloggedPage.response?.status || 0,
+          finalUrl: reloggedPage.finalUrl,
+          redirects: reloggedPage.redirects,
+          looksLoggedIn: directHints?.looksLoggedIn || false,
+          hints: directHints,
+        });
+        continue;
+      }
+
+      participantProbes.push({
+        url,
+        loginFinalUrl: "",
+        loginRedirects: [],
+        status: directPage.response?.status || 0,
+        finalUrl: directPage.finalUrl,
+        redirects: directPage.redirects,
+        looksLoggedIn: directHints?.looksLoggedIn || false,
+        hints: directHints,
+      });
+    }
 
     const supportedLiveRegistration = false;
     const message = supportedLiveRegistration
@@ -501,15 +559,8 @@ export default async function handler(request, response) {
       },
       registerHints: hints,
       registerUrl,
-      participantPage: participantPage
-        ? {
-            status: participantPage.response?.status || 0,
-            finalUrl: participantPage.finalUrl,
-            redirects: participantPage.redirects,
-            looksLoggedIn: participantHints?.looksLoggedIn || false,
-            hints: participantHints,
-          }
-        : null,
+      registerCandidates,
+      participantProbes,
     });
   } catch (error) {
     response.status(400).json({ error: error.message });

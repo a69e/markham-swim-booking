@@ -6,3 +6,8 @@ npm-debug.log*
 .env
 .env.*
 !.env.example
+.vercel
+.env*
+.encryption-key*.local
+pnpm-lock.yaml
+pnpm-workspace.yaml

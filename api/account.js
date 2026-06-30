@@ -76,6 +76,54 @@ function cookieHeader(cookieValues) {
     .join("; ");
 }
 
+function mergeCookieHeader(existingCookie, response) {
+  const rawCookie =
+    typeof response.headers.getSetCookie === "function"
+      ? response.headers.getSetCookie().join(",")
+      : response.headers.get("set-cookie") || "";
+  const cookiePairs = new Map();
+
+  [existingCookie, rawCookie]
+    .filter(Boolean)
+    .flatMap((value) => value.split(/,(?=\s*[^;,]+=[^;,]+)/g))
+    .map((cookie) => cookie.trim().split(";")[0])
+    .filter(Boolean)
+    .forEach((pair) => {
+      const name = pair.split("=")[0];
+      cookiePairs.set(name, pair);
+    });
+
+  return [...cookiePairs.values()].join("; ");
+}
+
+async function followLoginRedirects(initialLocation, initialCookie) {
+  let url = new URL(initialLocation, BASE_URL).toString();
+  let cookie = initialCookie;
+  const redirects = [url];
+  let finalUrl = url;
+
+  for (let index = 0; index < 5; index += 1) {
+    const response = await fetch(url, {
+      redirect: "manual",
+      headers: {
+        Accept: "text/html",
+        Cookie: cookie,
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+    cookie = mergeCookieHeader(cookie, response);
+    finalUrl = url;
+
+    const location = response.headers.get("location") || "";
+    if (response.status < 300 || response.status >= 400 || !location) break;
+
+    url = new URL(location, url).toString();
+    redirects.push(url);
+  }
+
+  return { cookie, redirects, finalUrl };
+}
+
 function htmlDecode(value) {
   return value
     .replace(/&amp;/g, "&")
@@ -201,10 +249,10 @@ export async function verifyPerfectMindLogin(email, password) {
     body,
   });
 
-  const responseCookies = [
+  const initialCookie = cookieHeader([
     ...loginCookies,
     ...setCookieValues(verifyResponse.headers),
-  ];
+  ]);
   const location = verifyResponse.headers.get("location") || "";
   const redirectedAwayFromLogin =
     verifyResponse.status >= 300 &&
@@ -216,12 +264,15 @@ export async function verifyPerfectMindLogin(email, password) {
     throw new Error("City of Markham login failed.");
   }
 
-  const cookie = cookieHeader(responseCookies);
+  const redirectResult = await followLoginRedirects(location, initialCookie);
+  const cookie = redirectResult.cookie;
   const fullName = await fetchFullName(cookie);
 
   return {
     verifiedAt: new Date().toISOString(),
     location,
+    finalUrl: redirectResult.finalUrl,
+    redirects: redirectResult.redirects,
     cookie,
     fullName,
   };

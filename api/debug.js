@@ -332,6 +332,8 @@ export default async function handler(request, response) {
       freshLogin: {
         ok: Boolean(freshLogin),
         fullName: freshLogin?.fullName || "",
+        finalUrl: freshLogin?.finalUrl || "",
+        redirects: freshLogin?.redirects || [],
         error: freshLoginError,
       },
       probes,

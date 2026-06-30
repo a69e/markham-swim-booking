@@ -19,6 +19,13 @@ const resultCount = document.querySelector("#resultCount");
 const loadTrigger = document.querySelector("#loadTrigger");
 const template = document.querySelector("#sessionRowTemplate");
 const filterPanels = [...document.querySelectorAll(".multi-filter")];
+const accountButton = document.querySelector("#accountButton");
+const accountDialog = document.querySelector("#accountDialog");
+const accountForm = document.querySelector("#accountForm");
+const accountClose = document.querySelector("#accountClose");
+const accountEmail = document.querySelector("#accountEmail");
+const accountPassword = document.querySelector("#accountPassword");
+const accountStatus = document.querySelector("#accountStatus");
 
 function uniqueValues(key) {
   return [...new Set(sessions.map((session) => session[key]).filter(Boolean))]
@@ -135,6 +142,60 @@ async function saveQueuedSession(session) {
   const data = await response.json();
   queuedKeys.add(data.key || queuedSessionKey(session));
   queueApiAvailable = true;
+}
+
+function setAccountMessage(message, tone = "") {
+  accountStatus.textContent = message;
+  accountStatus.dataset.tone = tone;
+}
+
+function updateAccountButton(hasAccount, email = "") {
+  accountButton.textContent = hasAccount ? "Saved" : "Account";
+  accountButton.title = email || "Save account";
+}
+
+async function loadAccountStatus() {
+  try {
+    const params = new URLSearchParams({ deviceId: deviceId() });
+    const response = await fetch(`./api/account?${params}`, { cache: "no-store" });
+    if (!response.ok) throw new Error("Account API failed.");
+    const data = await response.json();
+
+    updateAccountButton(data.hasAccount, data.email);
+    accountEmail.value = data.email || "";
+    setAccountMessage(
+      data.hasAccount ? "Account saved for this device." : "No account saved yet.",
+      data.hasAccount ? "success" : "",
+    );
+  } catch {
+    updateAccountButton(false);
+    setAccountMessage("Account database is not connected.", "error");
+  }
+}
+
+async function saveAccount(event) {
+  event.preventDefault();
+  setAccountMessage("Saving...");
+
+  try {
+    const response = await fetch("./api/account", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: deviceId(),
+        email: accountEmail.value,
+        password: accountPassword.value,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Unable to save account.");
+
+    accountPassword.value = "";
+    updateAccountButton(true, data.email);
+    setAccountMessage("Account saved for this device.", "success");
+  } catch (error) {
+    setAccountMessage(error.message, "error");
+  }
 }
 
 function renderSessions() {
@@ -282,6 +343,21 @@ function resetVisibleList() {
 locationOptions.addEventListener("change", resetVisibleList);
 serviceOptions.addEventListener("change", resetVisibleList);
 
+accountButton.addEventListener("click", () => {
+  accountDialog.showModal();
+  accountEmail.focus();
+});
+
+accountClose.addEventListener("click", () => {
+  accountDialog.close();
+});
+
+accountDialog.addEventListener("click", (event) => {
+  if (event.target === accountDialog) accountDialog.close();
+});
+
+accountForm.addEventListener("submit", saveAccount);
+
 document.addEventListener("click", (event) => {
   filterPanels.forEach((panel) => {
     if (!panel.contains(event.target)) panel.removeAttribute("open");
@@ -325,4 +401,5 @@ function loadMoreIfNeeded() {
 window.addEventListener("scroll", loadMoreIfNeeded, { passive: true });
 window.addEventListener("resize", loadMoreIfNeeded);
 
+loadAccountStatus();
 loadSessions();

@@ -14,12 +14,20 @@ export default async function handler(request, response) {
       select count(*)::int as queued_count
       from queued_sessions
     `;
+    const accountRows = await db`
+      select count(*)::int as account_count
+      from account_credentials
+    `;
 
     response.setHeader("Cache-Control", "no-store");
     response.status(200).json({
       ok: true,
       database: "connected",
       queuedCount: rows[0]?.queued_count ?? 0,
+      accountCount: accountRows[0]?.account_count ?? 0,
+      encryptionConfigured: Boolean(
+        process.env.ENCRYPTION_KEY && process.env.ENCRYPTION_KEY.length >= 32,
+      ),
     });
   } catch (error) {
     const status = error.message.includes("DATABASE_URL") ? 503 : 500;

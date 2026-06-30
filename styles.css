@@ -73,6 +73,19 @@ summary {
   font-weight: 700;
 }
 
+.account-button {
+  flex: 0 0 auto;
+  margin-left: auto;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 4px;
+  background: #2b7ab1;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .filters {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -298,6 +311,98 @@ summary {
   line-height: 1.45;
 }
 
+.account-dialog {
+  width: min(calc(100% - 28px), 390px);
+  padding: 0;
+  border: 1px solid #d8d8d8;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #000000;
+  box-shadow: var(--shadow);
+}
+
+.account-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.38);
+}
+
+.account-form {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.account-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.account-form-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 400;
+}
+
+.account-close {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 4px;
+  background: #f0f0f0;
+  color: #000000;
+  font-size: 16px;
+  font-weight: 400;
+}
+
+.account-form label {
+  display: grid;
+  gap: 5px;
+  color: #69696b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.account-form input {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 9px;
+  border: 1px solid #d8d8d8;
+  border-radius: 2px;
+  color: #000000;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.account-status {
+  min-height: 18px;
+  margin: 0;
+  color: #69696b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.account-status[data-tone="success"] {
+  color: #2a7ab0;
+}
+
+.account-status[data-tone="error"] {
+  color: #b00020;
+}
+
+.account-save {
+  min-height: 36px;
+  border: 0;
+  border-radius: 4px;
+  background: #2b7ab1;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 400;
+}
+
 @media (max-width: 360px) {
   .top-bar {
     padding-left: 12px;
@@ -310,6 +415,12 @@ summary {
 
   .org-name,
   .org-phone {
+    font-size: 12px;
+  }
+
+  .account-button {
+    padding-left: 8px;
+    padding-right: 8px;
     font-size: 12px;
   }
 

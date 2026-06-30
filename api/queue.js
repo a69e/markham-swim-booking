@@ -63,10 +63,17 @@ export default async function handler(request, response) {
       }
 
       await db`
-        insert into queued_sessions (device_id, session_key, session, status)
-        values (${body.deviceId}, ${key}, ${JSON.stringify(body.session)}, 'queued')
+        insert into queued_sessions (device_id, account_id, session_key, session, status)
+        values (
+          ${body.deviceId},
+          (select id from account_credentials where device_id = ${body.deviceId}),
+          ${key},
+          ${JSON.stringify(body.session)},
+          'queued'
+        )
         on conflict (device_id, session_key)
         do update set
+          account_id = (select id from account_credentials where device_id = ${body.deviceId}),
           session = excluded.session,
           status = 'queued',
           updated_at = now()

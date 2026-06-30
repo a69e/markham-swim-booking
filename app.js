@@ -7,6 +7,7 @@ let filteredSessions = [];
 let nextKey = null;
 let hasMore = true;
 let isLoadingMore = false;
+let queuedKeys = new Set();
 
 const locationOptions = document.querySelector("#locationOptions");
 const serviceOptions = document.querySelector("#serviceOptions");
@@ -94,6 +95,15 @@ function queuedSessionKey(session) {
   return [session.service, session.date, session.timeRange, session.location].join("|");
 }
 
+function deviceId() {
+  let id = localStorage.getItem("markhamSwimDeviceId");
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem("markhamSwimDeviceId", id);
+  }
+  return id;
+}
+
 function queuedSessions() {
   try {
     return JSON.parse(localStorage.getItem("queuedSessions") || "[]");
@@ -102,12 +112,42 @@ function queuedSessions() {
   }
 }
 
-function saveQueuedSession(session) {
+function saveQueuedSessionLocally(session) {
   const queue = queuedSessions();
   const key = queuedSessionKey(session);
   if (!queue.some((item) => item.key === key)) {
     queue.push({ key, session, createdAt: new Date().toISOString() });
     localStorage.setItem("queuedSessions", JSON.stringify(queue));
+  }
+  queuedKeys.add(key);
+}
+
+async function loadQueuedSessions() {
+  queuedKeys = new Set(queuedSessions().map((item) => item.key));
+
+  try {
+    const params = new URLSearchParams({ deviceId: deviceId() });
+    const response = await fetch(`./api/queue?${params}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json();
+    (data.queued || []).forEach((item) => queuedKeys.add(item.session_key));
+  } catch {
+    // Local queue stays available when the database is not configured.
+  }
+}
+
+async function saveQueuedSession(session) {
+  saveQueuedSessionLocally(session);
+
+  try {
+    const response = await fetch("./api/queue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId: deviceId(), session }),
+    });
+    if (!response.ok) throw new Error("Queue API failed.");
+  } catch {
+    // The local fallback already saved the queue item.
   }
 }
 
@@ -153,7 +193,12 @@ function renderSessions() {
 
     const button = row.querySelector("button");
     const buttonClass = actionClass(session.action);
-    button.textContent = isRegisterAction(session.action) ? "Register" : "Queue";
+    const queueKey = queuedSessionKey(session);
+    button.textContent = isRegisterAction(session.action)
+      ? "Register"
+      : queuedKeys.has(queueKey)
+        ? "Queued"
+        : "Queue";
     button.className = actionClass(session.action);
     button.disabled = buttonClass === "full";
     if (isRegisterAction(session.action) && session.url) {
@@ -161,9 +206,9 @@ function renderSessions() {
         window.location.href = session.url;
       });
     } else if (buttonClass !== "full") {
-      button.addEventListener("click", () => {
-        saveQueuedSession(session);
+      button.addEventListener("click", async () => {
         button.textContent = "Queued";
+        await saveQueuedSession(session);
       });
     }
 
@@ -209,6 +254,7 @@ async function fetchSessionBatch(after) {
 
 async function loadSessions() {
   try {
+    await loadQueuedSessions();
     const data = await fetchSessionBatch();
     sessions = data.sessions;
     nextKey = data.nextKey;

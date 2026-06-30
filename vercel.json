@@ -3,6 +3,9 @@
   "functions": {
     "api/classes.js": {
       "maxDuration": 30
+    },
+    "api/debug.js": {
+      "maxDuration": 30
     }
   }
 }

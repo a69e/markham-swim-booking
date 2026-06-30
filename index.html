@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Markham Swim Booking</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="top-bar">
+        <img
+          class="org-logo"
+          src="https://content.perfectmind.com/a99974b35d3c4078b8de347eab91319f/logo/Markham+Logo+-+CMYK.png"
+          alt="City of Markham"
+        />
+        <div class="org-details">
+          <div class="org-name">City of Markham</div>
+          <div class="org-phone">(905) 477-5530</div>
+        </div>
+      </header>
+
+      <section class="filters" aria-label="Swimming filters">
+        <details class="multi-filter" id="locationFilter">
+          <summary>
+            <span>Location</span>
+            <strong id="locationSummary">All locations</strong>
+          </summary>
+          <div class="multi-options" id="locationOptions"></div>
+        </details>
+        <details class="multi-filter" id="serviceFilter">
+          <summary>
+            <span>Service</span>
+            <strong id="serviceSummary">All services</strong>
+          </summary>
+          <div class="multi-options" id="serviceOptions"></div>
+        </details>
+      </section>
+
+      <section class="summary" aria-live="polite">
+        <strong id="resultCount">Loading sessions...</strong>
+      </section>
+
+      <section class="session-list" id="sessionList" aria-label="Swimming sessions"></section>
+      <div class="load-trigger" id="loadTrigger" aria-hidden="true"></div>
+    </main>
+
+    <template id="sessionRowTemplate">
+      <article class="session-row">
+        <div class="session-main">
+          <h2><a></a></h2>
+          <p></p>
+        </div>
+        <div class="session-location"></div>
+        <div class="session-action">
+          <p></p>
+          <button type="button"></button>
+        </div>
+      </article>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

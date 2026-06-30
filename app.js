@@ -202,7 +202,7 @@ function setAccountMessage(message, tone = "") {
 
 function updateAccountButton(hasAccount, email = "", fullName = "") {
   accountSaved = hasAccount;
-  const label = fullName || email || "My info";
+  const label = fullName || "My info";
   accountButton.textContent = hasAccount ? label : "Login";
   accountButton.title = email || "Save account";
   accountButton.classList.toggle("saved", hasAccount);

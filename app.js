@@ -8,6 +8,7 @@ let nextKey = null;
 let hasMore = true;
 let isLoadingMore = false;
 let queuedKeys = new Set();
+let queueApiAvailable = true;
 
 const locationOptions = document.querySelector("#locationOptions");
 const serviceOptions = document.querySelector("#serviceOptions");
@@ -104,51 +105,36 @@ function deviceId() {
   return id;
 }
 
-function queuedSessions() {
-  try {
-    return JSON.parse(localStorage.getItem("queuedSessions") || "[]");
-  } catch {
-    return [];
-  }
-}
-
-function saveQueuedSessionLocally(session) {
-  const queue = queuedSessions();
-  const key = queuedSessionKey(session);
-  if (!queue.some((item) => item.key === key)) {
-    queue.push({ key, session, createdAt: new Date().toISOString() });
-    localStorage.setItem("queuedSessions", JSON.stringify(queue));
-  }
-  queuedKeys.add(key);
-}
-
 async function loadQueuedSessions() {
-  queuedKeys = new Set(queuedSessions().map((item) => item.key));
+  queuedKeys = new Set();
 
   try {
     const params = new URLSearchParams({ deviceId: deviceId() });
     const response = await fetch(`./api/queue?${params}`, { cache: "no-store" });
-    if (!response.ok) return;
+    if (!response.ok) throw new Error("Queue API failed.");
     const data = await response.json();
     (data.queued || []).forEach((item) => queuedKeys.add(item.session_key));
+    queueApiAvailable = true;
   } catch {
-    // Local queue stays available when the database is not configured.
+    queueApiAvailable = false;
   }
 }
 
 async function saveQueuedSession(session) {
-  saveQueuedSessionLocally(session);
+  const response = await fetch("./api/queue", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceId: deviceId(), session }),
+  });
 
-  try {
-    const response = await fetch("./api/queue", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deviceId: deviceId(), session }),
-    });
-    if (!response.ok) throw new Error("Queue API failed.");
-  } catch {
-    // The local fallback already saved the queue item.
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || "Queue API failed.");
   }
+
+  const data = await response.json();
+  queuedKeys.add(data.key || queuedSessionKey(session));
+  queueApiAvailable = true;
 }
 
 function renderSessions() {
@@ -207,16 +193,33 @@ function renderSessions() {
       });
     } else if (buttonClass !== "full") {
       button.addEventListener("click", async () => {
-        button.textContent = "Queued";
-        await saveQueuedSession(session);
+        const previousText = button.textContent;
+        button.textContent = "Saving...";
+        button.disabled = true;
+
+        try {
+          await saveQueuedSession(session);
+          button.textContent = "Queued";
+        } catch {
+          queueApiAvailable = false;
+          button.textContent = "Queue failed";
+          setTimeout(() => {
+            button.textContent = previousText;
+            button.disabled = false;
+          }, 1800);
+        }
       });
     }
 
     sessionList.append(row);
   });
 
-  loadTrigger.hidden = !hasMore;
-  loadTrigger.textContent = hasMore ? "Loading more..." : "";
+  loadTrigger.hidden = !hasMore && queueApiAvailable;
+  loadTrigger.textContent = !queueApiAvailable
+    ? "Queue database is not connected."
+    : hasMore
+      ? "Loading more..."
+      : "";
 }
 
 function refreshFilters() {

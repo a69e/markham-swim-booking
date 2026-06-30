@@ -232,6 +232,17 @@ function extractRegisterHints(html, baseUrl) {
   };
 }
 
+function findRegisterUrl(hints) {
+  const registerLink = (hints.links || []).find((link) =>
+    /\/Clients\/BookMe4EventParticipants\b/i.test(link.href),
+  );
+  if (registerLink?.href) return registerLink.href;
+
+  return (hints.apiHints || []).find((url) =>
+    /\/Clients\/BookMe4EventParticipants\b/i.test(url),
+  ) || "";
+}
+
 function sessionSummary(row) {
   const session = row.session || {};
   return {
@@ -454,6 +465,13 @@ export default async function handler(request, response) {
           apiHints: [],
           hiddenInputs: [],
         };
+    const registerUrl = findRegisterUrl(hints);
+    const participantPage = registerUrl
+      ? await fetchHtmlWithRedirects(registerUrl, classPage.cookie || login.cookie)
+      : null;
+    const participantHints = participantPage?.html
+      ? extractRegisterHints(participantPage.html, participantPage.finalUrl)
+      : null;
 
     const supportedLiveRegistration = false;
     const message = supportedLiveRegistration
@@ -482,6 +500,16 @@ export default async function handler(request, response) {
         looksLoggedIn: hints.looksLoggedIn,
       },
       registerHints: hints,
+      registerUrl,
+      participantPage: participantPage
+        ? {
+            status: participantPage.response?.status || 0,
+            finalUrl: participantPage.finalUrl,
+            redirects: participantPage.redirects,
+            looksLoggedIn: participantHints?.looksLoggedIn || false,
+            hints: participantHints,
+          }
+        : null,
     });
   } catch (error) {
     response.status(400).json({ error: error.message });

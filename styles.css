@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap");
+
 :root {
   --page: #f2f2f2;
   --surface: #ffffff;
@@ -20,7 +22,7 @@ body {
   min-height: 100vh;
   background: var(--page);
   color: var(--ink);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Open Sans", Arial, sans-serif;
 }
 
 button,
@@ -73,17 +75,73 @@ summary {
   font-weight: 700;
 }
 
-.account-button {
+.account-menu {
+  position: relative;
   flex: 0 0 auto;
   margin-left: auto;
+}
+
+.account-button {
+  display: block;
+  max-width: 130px;
   min-height: 32px;
-  padding: 0 11px;
+  padding: 0 28px 0 11px;
   border: 0;
   border-radius: 4px;
   background: #2b7ab1;
   color: #ffffff;
   font-size: 12px;
   font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-button.saved {
+  border: 1px solid #d8d8d8;
+  background: #ffffff;
+  color: #333333;
+}
+
+.account-menu.saved::before {
+  content: "";
+  position: absolute;
+  right: 11px;
+  top: 14px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid #333333;
+  z-index: 1;
+}
+
+.account-dropdown {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 130px;
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 5px 10px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.account-dropdown-item {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 0;
+  background: #ffffff;
+  color: #333333;
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.account-dropdown-item:hover,
+.account-dropdown-item:focus {
+  background: #eaeaea;
 }
 
 .filters {

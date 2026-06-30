@@ -21,11 +21,16 @@ const template = document.querySelector("#sessionRowTemplate");
 const filterPanels = [...document.querySelectorAll(".multi-filter")];
 const accountButton = document.querySelector("#accountButton");
 const accountDialog = document.querySelector("#accountDialog");
+const accountMenu = document.querySelector("#accountMenu");
+const accountDropdown = document.querySelector("#accountDropdown");
+const accountManage = document.querySelector("#accountManage");
+const accountLogout = document.querySelector("#accountLogout");
 const accountForm = document.querySelector("#accountForm");
 const accountClose = document.querySelector("#accountClose");
 const accountEmail = document.querySelector("#accountEmail");
 const accountPassword = document.querySelector("#accountPassword");
 const accountStatus = document.querySelector("#accountStatus");
+let accountSaved = false;
 
 function uniqueValues(key) {
   return [...new Set(sessions.map((session) => session[key]).filter(Boolean))]
@@ -150,8 +155,11 @@ function setAccountMessage(message, tone = "") {
 }
 
 function updateAccountButton(hasAccount, email = "") {
-  accountButton.textContent = hasAccount ? "Saved" : "Login";
+  accountSaved = hasAccount;
+  accountButton.textContent = hasAccount ? email || "My Account" : "Login";
   accountButton.title = email || "Save account";
+  accountButton.classList.toggle("saved", hasAccount);
+  accountMenu.classList.toggle("saved", hasAccount);
 }
 
 async function loadAccountStatus() {
@@ -175,7 +183,7 @@ async function loadAccountStatus() {
 
 async function saveAccount(event) {
   event.preventDefault();
-  setAccountMessage("Saving...");
+  setAccountMessage("Checking City of Markham login...");
 
   try {
     const response = await fetch("./api/account", {
@@ -192,10 +200,30 @@ async function saveAccount(event) {
 
     accountPassword.value = "";
     updateAccountButton(true, data.email);
-    setAccountMessage("Account saved for this device.", "success");
+    setAccountMessage("Login verified and saved.", "success");
+    setTimeout(() => accountDialog.close(), 700);
   } catch (error) {
     setAccountMessage(error.message, "error");
   }
+}
+
+async function logoutAccount() {
+  accountDropdown.hidden = true;
+  setAccountMessage("");
+
+  try {
+    await fetch("./api/account", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId: deviceId() }),
+    });
+  } catch {
+    // The next explicit login will overwrite the saved account if deletion fails.
+  }
+
+  accountEmail.value = "";
+  accountPassword.value = "";
+  updateAccountButton(false);
 }
 
 function renderSessions() {
@@ -343,9 +371,25 @@ function resetVisibleList() {
 locationOptions.addEventListener("change", resetVisibleList);
 serviceOptions.addEventListener("change", resetVisibleList);
 
-accountButton.addEventListener("click", () => {
+function openAccountDialog() {
+  accountDropdown.hidden = true;
   accountDialog.showModal();
   accountEmail.focus();
+}
+
+accountButton.addEventListener("click", () => {
+  if (!accountSaved) {
+    openAccountDialog();
+    return;
+  }
+
+  accountDropdown.hidden = !accountDropdown.hidden;
+});
+
+accountManage.addEventListener("click", openAccountDialog);
+
+accountLogout.addEventListener("click", () => {
+  logoutAccount();
 });
 
 accountClose.addEventListener("click", () => {
@@ -362,11 +406,13 @@ document.addEventListener("click", (event) => {
   filterPanels.forEach((panel) => {
     if (!panel.contains(event.target)) panel.removeAttribute("open");
   });
+  if (!accountMenu.contains(event.target)) accountDropdown.hidden = true;
 });
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   filterPanels.forEach((panel) => panel.removeAttribute("open"));
+  accountDropdown.hidden = true;
 });
 
 async function loadMoreSessions() {

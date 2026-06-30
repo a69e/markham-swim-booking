@@ -18,9 +18,19 @@
           <div class="org-name">City of Markham</div>
           <div class="org-phone">(905) 477-5530</div>
         </div>
-        <button class="account-button" id="accountButton" type="button">
-          Login
-        </button>
+        <div class="account-menu" id="accountMenu">
+          <button class="account-button" id="accountButton" type="button">
+            Login
+          </button>
+          <div class="account-dropdown" id="accountDropdown" hidden>
+            <button class="account-dropdown-item" id="accountManage" type="button">
+              My Account
+            </button>
+            <button class="account-dropdown-item" id="accountLogout" type="button">
+              Logout
+            </button>
+          </div>
+        </div>
       </header>
 
       <section class="filters" aria-label="Swimming filters">
@@ -65,7 +75,7 @@
     <dialog class="account-dialog" id="accountDialog">
       <form class="account-form" id="accountForm" method="dialog">
         <div class="account-form-header">
-          <h2>Account</h2>
+          <h2>Login</h2>
           <button class="account-close" id="accountClose" type="button" aria-label="Close">
             x
           </button>
@@ -86,7 +96,7 @@
         </label>
         <p class="account-status" id="accountStatus"></p>
         <button class="account-save" id="accountSave" type="submit">
-          Save
+          Login
         </button>
       </form>
     </dialog>

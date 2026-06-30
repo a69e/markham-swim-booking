@@ -6,6 +6,9 @@
     },
     "api/debug.js": {
       "maxDuration": 30
+    },
+    "api/register.js": {
+      "maxDuration": 30
     }
   }
 }

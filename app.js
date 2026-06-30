@@ -30,6 +30,7 @@ const accountMenu = document.querySelector("#accountMenu");
 const accountDropdown = document.querySelector("#accountDropdown");
 const accountManage = document.querySelector("#accountManage");
 const accountDebug = document.querySelector("#accountDebug");
+const accountProbe = document.querySelector("#accountProbe");
 const accountLogout = document.querySelector("#accountLogout");
 const accountForm = document.querySelector("#accountForm");
 const accountClose = document.querySelector("#accountClose");
@@ -444,6 +445,10 @@ accountManage.addEventListener("click", () => {
 
 accountDebug.addEventListener("click", () => {
   window.location.href = `./api/debug?deviceId=${encodeURIComponent(deviceId())}`;
+});
+
+accountProbe.addEventListener("click", () => {
+  window.location.href = `./api/register?deviceId=${encodeURIComponent(deviceId())}&dryRun=true`;
 });
 
 accountLogout.addEventListener("click", () => {

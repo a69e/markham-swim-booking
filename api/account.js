@@ -145,7 +145,7 @@ function extractFullName(html) {
   return fullName;
 }
 
-async function fetchFullName(cookie) {
+export async function fetchFullName(cookie) {
   for (const url of [CONTACT_URL, BOOKING_URL]) {
     const pageResponse = await fetch(url, {
       headers: {
@@ -165,7 +165,7 @@ async function fetchFullName(cookie) {
   return "";
 }
 
-async function verifyPerfectMindLogin(email, password) {
+export async function verifyPerfectMindLogin(email, password) {
   const loginResponse = await fetch(LOGIN_URL, {
     headers: {
       Accept: "text/html",

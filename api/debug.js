@@ -1,4 +1,5 @@
-import { decryptText } from "./crypto.js";
+import { decryptText, encryptText } from "./crypto.js";
+import { verifyPerfectMindLogin } from "./account.js";
 import { ensureQueueSchema, getSql } from "./db.js";
 
 const BASE_URL = "https://cityofmarkham.perfectmind.com";
@@ -152,27 +153,90 @@ function isLoginPage(html, url) {
   );
 }
 
-async function fetchProbe(path, cookie) {
-  const url = absoluteUrl(path);
-  const response = await fetch(url, {
-    redirect: "manual",
-    headers: {
-      Accept: "text/html",
-      Cookie: cookie,
-      "User-Agent": "Mozilla/5.0",
-    },
-  });
+function mergeCookieHeader(existingCookie, response) {
+  const rawCookie =
+    typeof response.headers.getSetCookie === "function"
+      ? response.headers.getSetCookie().join(",")
+      : response.headers.get("set-cookie") || "";
+  const cookiePairs = new Map();
 
-  const location = response.headers.get("location") || "";
-  const contentType = response.headers.get("content-type") || "";
-  const html = contentType.includes("text/html") ? await response.text() : "";
+  [existingCookie, rawCookie]
+    .filter(Boolean)
+    .flatMap((value) => value.split(/,(?=\s*[^;,]+=[^;,]+)/g))
+    .map((cookie) => cookie.trim().split(";")[0])
+    .filter(Boolean)
+    .forEach((pair) => {
+      const name = pair.split("=")[0];
+      cookiePairs.set(name, pair);
+    });
+
+  return [...cookiePairs.values()].join("; ");
+}
+
+async function fetchHtmlWithRedirects(path, initialCookie) {
+  let url = absoluteUrl(path);
+  let cookie = initialCookie;
+  const redirects = [];
+  let response;
+  let html = "";
+
+  for (let index = 0; index < 5; index += 1) {
+    response = await fetch(url, {
+      redirect: "manual",
+      headers: {
+        Accept: "text/html",
+        Cookie: cookie,
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+
+    cookie = mergeCookieHeader(cookie, response);
+    const location = response.headers.get("location") || "";
+    if (response.status >= 300 && response.status < 400 && location) {
+      const nextUrl = absoluteUrl(location);
+      redirects.push(nextUrl);
+      url = nextUrl;
+      continue;
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    html = contentType.includes("text/html") ? await response.text() : "";
+    break;
+  }
+
+  return { response, finalUrl: url, redirects, html, cookie };
+}
+
+async function fetchProbe(path, cookie) {
+  const { response, finalUrl, redirects, html } = await fetchHtmlWithRedirects(
+    path,
+    cookie,
+  );
+  const url = absoluteUrl(path);
+
+  if (!response) {
+    return {
+      url,
+      status: 0,
+      finalUrl,
+      redirects,
+      title: "",
+      looksLoggedIn: false,
+      nameHints: [],
+      forms: [],
+      links: [],
+      scripts: [],
+      apiHints: [],
+    };
+  }
 
   return {
     url,
     status: response.status,
-    redirectedTo: absoluteUrl(location),
+    finalUrl,
+    redirects,
     title: html ? pageTitle(html) : "",
-    looksLoggedIn: html ? !isLoginPage(html, location || url) : false,
+    looksLoggedIn: html ? !isLoginPage(html, finalUrl) : false,
     nameHints: html ? extractNameHints(html) : [],
     forms: html ? extractForms(html) : [],
     links: html ? extractLinks(html) : [],
@@ -196,7 +260,14 @@ export default async function handler(request, response) {
 
     const db = getSql();
     const rows = await db`
-      select email, full_name, session, updated_at
+      select
+        email,
+        full_name,
+        password_cipher,
+        password_iv,
+        password_tag,
+        session,
+        updated_at
       from account_credentials
       where device_id = ${deviceId}
       limit 1
@@ -207,10 +278,40 @@ export default async function handler(request, response) {
       return;
     }
 
-    const savedSession = rows[0].session;
-    const sessionText = decryptText(savedSession);
+    const savedSession = rows[0].session || {};
+    const sessionText = savedSession.cipher
+      ? decryptText(savedSession)
+      : JSON.stringify({});
     const session = JSON.parse(sessionText);
-    const cookie = session.cookie || "";
+    let freshLogin = null;
+    let freshLoginError = "";
+    let cookie = session.cookie || "";
+
+    try {
+      const password = decryptText({
+        cipher: rows[0].password_cipher,
+        iv: rows[0].password_iv,
+        tag: rows[0].password_tag,
+      });
+      freshLogin = await verifyPerfectMindLogin(rows[0].email, password);
+      cookie = freshLogin.cookie || cookie;
+      const encryptedSession = encryptText(JSON.stringify(freshLogin));
+      await db`
+        update account_credentials
+        set
+          full_name = coalesce(${freshLogin.fullName || null}, full_name),
+          session = ${JSON.stringify({
+            cipher: encryptedSession.cipher,
+            iv: encryptedSession.iv,
+            tag: encryptedSession.tag,
+            verifiedAt: freshLogin.verifiedAt,
+          })},
+          updated_at = now()
+        where device_id = ${deviceId}
+      `;
+    } catch (error) {
+      freshLoginError = error.message;
+    }
 
     if (!cookie) {
       response.status(400).json({ error: "Saved account has no login session." });
@@ -226,8 +327,13 @@ export default async function handler(request, response) {
     response.status(200).json({
       ok: true,
       email: maskEmail(rows[0].email),
-      storedFullName: rows[0].full_name || "",
+      storedFullName: freshLogin?.fullName || rows[0].full_name || "",
       savedSessionVerifiedAt: savedSession.verifiedAt || session.verifiedAt || null,
+      freshLogin: {
+        ok: Boolean(freshLogin),
+        fullName: freshLogin?.fullName || "",
+        error: freshLoginError,
+      },
       probes,
     });
   } catch (error) {

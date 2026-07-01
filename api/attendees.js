@@ -1,4 +1,4 @@
-import { ensureQueueSchema, getSql } from "./db.js";
+import { ensureQueueSchema, getSql } from "../lib/db.js";
 
 function validateDeviceId(deviceId) {
   if (typeof deviceId !== "string" || deviceId.length < 8) {

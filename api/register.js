@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { decryptText, encryptText } from "./crypto.js";
+import { accountScopeForDevice, ensureQueueSchema, getSql } from "../lib/db.js";
+import { decryptText, encryptText } from "../lib/crypto.js";
 import { verifyPerfectMindLogin } from "./account.js";
-import { ensureQueueSchema, getSql } from "./db.js";
-import { sendCheckoutNotification } from "./notifications.js";
+import { sendCheckoutNotification } from "../lib/notifications.js";
 
 const BASE_URL = "https://cityofmarkham.perfectmind.com";
 const DEFAULT_DRY_RUN = true;
@@ -1504,25 +1504,49 @@ async function markExpired(db, id) {
 
 async function selectQueuedSession(db, deviceId, requestedKey) {
   const key = typeof requestedKey === "string" ? requestedKey : "";
-  const rows = key
-    ? await db`
-        select *
-        from queued_sessions
-        where device_id = ${deviceId}
-          and session_key = ${key}
-          and status = 'queued'
-        limit 1
-      `
-    : await db`
-        select *
-        from queued_sessions
-        where device_id = ${deviceId}
-          and status = 'queued'
-        order by
-          start_at nulls last,
-          created_at
-        limit 30
-      `;
+  const scope = await accountScopeForDevice(db, deviceId);
+  const rows = scope.accountIds.length
+    ? key
+      ? await db`
+          select *
+          from queued_sessions
+          where account_id = any(${scope.accountIds})
+            and session_key = ${key}
+            and status = 'queued'
+          order by
+            case when device_id = ${deviceId} then 0 else 1 end,
+            updated_at desc
+          limit 1
+        `
+      : await db`
+          select *
+          from queued_sessions
+          where account_id = any(${scope.accountIds})
+            and status = 'queued'
+          order by
+            start_at nulls last,
+            created_at
+          limit 30
+        `
+    : key
+      ? await db`
+          select *
+          from queued_sessions
+          where device_id = ${deviceId}
+            and session_key = ${key}
+            and status = 'queued'
+          limit 1
+        `
+      : await db`
+          select *
+          from queued_sessions
+          where device_id = ${deviceId}
+            and status = 'queued'
+          order by
+            start_at nulls last,
+            created_at
+          limit 30
+        `;
 
   const now = new Date();
   const expired = [];

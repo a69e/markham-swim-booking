@@ -1,4 +1,4 @@
-import { ensureQueueSchema, getSql } from "./db.js";
+import { ensureQueueSchema, getSql } from "../lib/db.js";
 
 export default async function handler(request, response) {
   if (request.method !== "GET") {

@@ -1,6 +1,6 @@
-import { decryptText, encryptText } from "./crypto.js";
+import { decryptText, encryptText } from "../lib/crypto.js";
 import { verifyPerfectMindLogin } from "./account.js";
-import { ensureQueueSchema, getSql } from "./db.js";
+import { ensureQueueSchema, getSql } from "../lib/db.js";
 
 const BASE_URL = "https://cityofmarkham.perfectmind.com";
 const CONTACT_URL = `${BASE_URL}/Clients/Contact`;

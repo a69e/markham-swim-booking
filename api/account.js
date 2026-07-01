@@ -1,6 +1,6 @@
-import { encryptText, encryptionConfigured } from "./crypto.js";
-import { ensureQueueSchema, getSql } from "./db.js";
-import { syncAttendeesFromOfficialSite } from "./attendee-sync.js";
+import { encryptText, encryptionConfigured } from "../lib/crypto.js";
+import { ensureQueueSchema, getSql } from "../lib/db.js";
+import { syncAttendeesFromOfficialSite } from "../lib/attendee-sync.js";
 
 const BASE_URL = "https://cityofmarkham.perfectmind.com";
 const BOOKING_URL =

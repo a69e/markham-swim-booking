@@ -1,4 +1,4 @@
-import { ensureQueueSchema, getSql } from "./db.js";
+import { ensureQueueSchema, getSql } from "../lib/db.js";
 import { attemptQueuedRegistration } from "./register.js";
 
 function cronAuthorized(request) {

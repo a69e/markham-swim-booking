@@ -1,5 +1,5 @@
-import { ensureQueueSchema, getSql } from "./db.js";
-import { publicVapidKey, pushConfigured } from "./notifications.js";
+import { ensureQueueSchema, getSql } from "../lib/db.js";
+import { publicVapidKey, pushConfigured } from "../lib/notifications.js";
 
 function validateDeviceId(deviceId) {
   if (typeof deviceId !== "string" || deviceId.length < 8) {

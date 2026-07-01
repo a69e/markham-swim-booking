@@ -151,8 +151,7 @@ function attemptText(key) {
         hour: "numeric",
         minute: "2-digit",
       });
-  const error = attempt.lastError ? ` · ${attempt.lastError}` : "";
-  return `Last check: ${time}${error}`;
+  return `Last try: ${time}`;
 }
 
 function deviceId() {
@@ -226,6 +225,7 @@ async function attemptRegistration(session) {
     deviceId: deviceId(),
     key: queued.key,
     dryRun: "false",
+    direct: "true",
   });
   const response = await fetch(`./api/register?${params}`, { cache: "no-store" });
   const data = await response.json().catch(() => ({}));
@@ -254,13 +254,9 @@ async function registerFromRow(session, button) {
     button.className = "registered";
     button.disabled = true;
   } catch (error) {
-    if (error.message.includes("not confirmed")) {
-      button.textContent = "Queued";
-      button.className = "queued";
-      button.disabled = true;
-      return;
-    }
-
+    const key = queuedSessionKey(session);
+    queuedKeys.delete(key);
+    sessionStatuses.set(key, "failed");
     button.textContent = "Failed";
     setTimeout(() => {
       button.textContent = previousText;

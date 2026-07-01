@@ -668,11 +668,176 @@ function buildParticipantSelectionSubmission(html, baseUrl, attendee) {
     action: action.action,
     method: action.method,
     body,
+    selectedMemberId: selectedRecord.memberId,
     selectedParticipantIndex: selected,
     selectedParticipantLabel: selectedRecord.fullName,
     selectedCheckbox,
     fieldCount: [...body.keys()].length,
   };
+}
+
+function extractAjaxAntiForgeryToken(html) {
+  const ajaxForm = extractFormHtml(html, "AjaxAntiForgeryForm");
+  const ajaxToken = ajaxForm.match(
+    /name=["']__RequestVerificationToken["'][^>]*value=["']([^"']+)["']/i,
+  )?.[1];
+  if (ajaxToken) return htmlDecode(ajaxToken);
+
+  return htmlDecode(
+    html.match(/name=["']__RequestVerificationToken["'][^>]*value=["']([^"']+)["']/i)
+      ?.[1] || "",
+  );
+}
+
+function extractQuotedValue(block, key) {
+  const pattern = new RegExp(`${key}:\\s*'([^']*)'`, "i");
+  return htmlDecode(block.match(pattern)?.[1] || "");
+}
+
+function extractNumberValue(block, key) {
+  const pattern = new RegExp(`${key}:\\s*([0-9]+)`, "i");
+  const value = block.match(pattern)?.[1] || "";
+  return value ? Number(value) : "";
+}
+
+function extractEventObjectHoldModel(html) {
+  const block = html.match(/var\s+eventObjectHoldModel\s*=\s*{([\s\S]*?)\n\s*};/i)?.[1] || "";
+  if (!block) return null;
+
+  return {
+    RecordId: extractQuotedValue(block, "RecordId"),
+    ObjectId: extractQuotedValue(block, "ObjectId"),
+    IsAdmin: extractQuotedValue(block, "IsAdmin") || "false",
+    EventInfo: {
+      OccurrenceDate: extractQuotedValue(block, "OccurrenceDate"),
+      OccurrenceTime: extractQuotedValue(block, "OccurrenceTime"),
+      LocationId: extractQuotedValue(block, "LocationId"),
+      BookingType: extractNumberValue(block, "BookingType"),
+      EventId: extractQuotedValue(block, "EventId"),
+      ParentId: extractQuotedValue(block, "ParentId"),
+      EventGroupId: extractQuotedValue(block, "EventGroupId"),
+      Token: extractQuotedValue(block, "Token"),
+    },
+  };
+}
+
+function appendNestedParam(body, key, value) {
+  if (value === null || value === undefined || value === "") return;
+  if (Array.isArray(value)) {
+    value.forEach((item) => appendNestedParam(body, `${key}[]`, item));
+    return;
+  }
+  if (typeof value === "object") {
+    Object.entries(value).forEach(([childKey, childValue]) => {
+      appendNestedParam(body, `${key}[${childKey}]`, childValue);
+    });
+    return;
+  }
+  body.append(key, String(value));
+}
+
+function buildAjaxBody(data, token) {
+  const body = new URLSearchParams();
+  Object.entries(data || {}).forEach(([key, value]) => appendNestedParam(body, key, value));
+  body.append("__RequestVerificationToken", token);
+  return body;
+}
+
+async function postAjaxAntiForgery(url, data, cookie, referer, token) {
+  const response = await fetch(absoluteUrl(url), {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      Accept: "application/json, text/javascript, */*; q=0.01",
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      Cookie: cookie || "",
+      Origin: BASE_URL,
+      Referer: referer,
+      "User-Agent": "Mozilla/5.0",
+      "X-Requested-With": "XMLHttpRequest",
+    },
+    body: buildAjaxBody(data, token),
+  });
+  const responseCookie = mergeCookieHeader(cookie || "", response);
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  let json = null;
+  if (contentType.includes("json") || /^[\s[{]/.test(text)) {
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = null;
+    }
+  }
+
+  return {
+    status: response.status,
+    ok: response.ok,
+    finalUrl: url,
+    cookie: responseCookie,
+    text: text.slice(0, 400),
+    json,
+  };
+}
+
+async function prepareOfficialRegistrationHold(html, pageUrl, cookie, submission) {
+  const token = extractAjaxAntiForgeryToken(html);
+  const holdModel = extractEventObjectHoldModel(html);
+  if (!token) {
+    return { ok: false, error: "Official anti-forgery token was not found." };
+  }
+  if (!holdModel?.RecordId || !holdModel?.ObjectId || !holdModel?.EventInfo?.EventId) {
+    return { ok: false, error: "Official hold model was not found." };
+  }
+  if (!submission?.selectedMemberId) {
+    return { ok: false, error: "Selected attendee member id was not found." };
+  }
+
+  const canBook = await postAjaxAntiForgery(
+    "/SocialSite/BookMe4Extras/CanBookMember",
+    {
+      eventId: holdModel.EventInfo.EventId,
+      widgetId: "6825ea71-e5b7-4c2a-948f-9195507ad90a",
+      occurrenceDate: holdModel.EventInfo.OccurrenceDate,
+      memberId: submission.selectedMemberId,
+      otherSelectedMembersIds: [],
+    },
+    cookie,
+    pageUrl,
+    token,
+  );
+  if (canBook.json && canBook.json.canBookMember === false) {
+    return {
+      ok: false,
+      error: canBook.json.popupText || canBook.json.title || "Selected attendee cannot book this session.",
+      canBook,
+    };
+  }
+  if (!canBook.ok) {
+    return { ok: false, error: "Official membership check failed.", canBook };
+  }
+
+  const hold = await postAjaxAntiForgery(
+    "/SocialSite/ObjectHolds/CreateEventHold",
+    {
+      ContactId: submission.selectedMemberId,
+      ...holdModel,
+    },
+    cookie,
+    pageUrl,
+    token,
+  );
+  const holdFailed = !hold.ok || (hold.json && hold.json.succeed === false);
+  if (holdFailed) {
+    return {
+      ok: false,
+      error: hold.json?.message || hold.json?.failureReasonMessage || "Official spot hold failed.",
+      canBook,
+      hold,
+    };
+  }
+
+  return { ok: true, cookie: hold.cookie || canBook.cookie || cookie, canBook, hold };
 }
 
 async function submitUrlEncodedForm(action, body, cookie, referer) {
@@ -741,6 +906,48 @@ function analyzeRegistrationPage(html, finalUrl) {
     forms: extractForms(html, finalUrl),
     links: extractLinks(html, finalUrl),
   };
+}
+
+async function submitOfficialParticipantSelection({
+  html,
+  pageUrl,
+  cookie,
+  submission,
+  dryRun,
+}) {
+  if (submission.error) {
+    return { submission, preflight: null, result: null };
+  }
+
+  let preflight = null;
+  let result = null;
+
+  if (!dryRun) {
+    preflight = await prepareOfficialRegistrationHold(
+      html,
+      pageUrl,
+      cookie,
+      submission,
+    );
+    if (!preflight.ok) {
+      return { submission, preflight, result: null };
+    }
+
+    const submitted = await submitUrlEncodedForm(
+      submission.action,
+      submission.body,
+      preflight.cookie || cookie,
+      pageUrl,
+    );
+    result = analyzeRegistrationPage(submitted.html || "", submitted.finalUrl);
+    result.status = submitted.response?.status || 0;
+    result.redirects = submitted.redirects;
+    result.looksLoggedIn = submitted.html
+      ? !isLoginPage(submitted.html, submitted.finalUrl)
+      : false;
+  }
+
+  return { submission, preflight, result };
 }
 
 async function attendeeForQueuedSession(db, queued, account) {
@@ -1009,6 +1216,7 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
     ]);
     const participantProbes = [];
     let officialSubmission = null;
+    let officialPreflight = null;
     let officialSubmissionResult = null;
 
     for (const url of registerCandidates) {
@@ -1053,24 +1261,16 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
           attendee,
         );
         if (!officialSubmission && !submission.error) {
-          officialSubmission = submission;
-          if (!dryRun) {
-            const submitted = await submitUrlEncodedForm(
-              submission.action,
-              submission.body,
-              formLogin?.cookie || reloggedPage.cookie || participantLogin.cookie,
-              formLogin?.finalUrl || reloggedPage.finalUrl,
-            );
-            officialSubmissionResult = analyzeRegistrationPage(
-              submitted.html || "",
-              submitted.finalUrl,
-            );
-            officialSubmissionResult.status = submitted.response?.status || 0;
-            officialSubmissionResult.redirects = submitted.redirects;
-            officialSubmissionResult.looksLoggedIn = submitted.html
-              ? !isLoginPage(submitted.html, submitted.finalUrl)
-              : false;
-          }
+          const official = await submitOfficialParticipantSelection({
+            html: participantHtml,
+            pageUrl: formLogin?.finalUrl || reloggedPage.finalUrl,
+            cookie: formLogin?.cookie || reloggedPage.cookie || participantLogin.cookie,
+            submission,
+            dryRun,
+          });
+          officialSubmission = official.submission;
+          officialPreflight = official.preflight;
+          officialSubmissionResult = official.result;
         }
         participantProbes.push({
           url,
@@ -1112,24 +1312,16 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
         attendee,
       );
       if (!officialSubmission && !directSubmission.error) {
-        officialSubmission = directSubmission;
-        if (!dryRun) {
-          const submitted = await submitUrlEncodedForm(
-            directSubmission.action,
-            directSubmission.body,
-            directPage.cookie || classPage.cookie || login.cookie,
-            directPage.finalUrl,
-          );
-          officialSubmissionResult = analyzeRegistrationPage(
-            submitted.html || "",
-            submitted.finalUrl,
-          );
-          officialSubmissionResult.status = submitted.response?.status || 0;
-          officialSubmissionResult.redirects = submitted.redirects;
-          officialSubmissionResult.looksLoggedIn = submitted.html
-            ? !isLoginPage(submitted.html, submitted.finalUrl)
-            : false;
-        }
+        const official = await submitOfficialParticipantSelection({
+          html: directPage.html || "",
+          pageUrl: directPage.finalUrl,
+          cookie: directPage.cookie || classPage.cookie || login.cookie,
+          submission: directSubmission,
+          dryRun,
+        });
+        officialSubmission = official.submission;
+        officialPreflight = official.preflight;
+        officialSubmissionResult = official.result;
       }
       participantProbes.push({
         url,
@@ -1170,12 +1362,23 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
             updated_at = now()
         where id = ${queued.id}
       `;
+    } else if (!dryRun && options.directAttempt) {
+      await db`
+        update queued_sessions
+        set status = 'failed',
+            last_attempt_at = now(),
+            last_error = 'Direct registration was not confirmed.',
+            updated_at = now()
+        where id = ${queued.id}
+      `;
     }
     const message = registrationConfirmed
       ? "Registration confirmed."
       : dryRun
         ? "Dry-run probe finished. No official registration was submitted."
-        : "Official flow was submitted, but registration was not confirmed yet.";
+        : officialPreflight?.error ||
+          officialSubmissionResult?.title ||
+          "Official flow was submitted, but registration was not confirmed yet.";
     await markAttempt(db, queued.id, message);
 
     return {
@@ -1214,6 +1417,7 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
             fieldCount: officialSubmission.fieldCount,
           }
         : null,
+      officialPreflight,
       officialSubmissionResult,
       registrationConfirmed,
     };
@@ -1249,6 +1453,7 @@ export default async function handler(request, response) {
 
     const payload = await attemptQueuedRegistration(db, queued, {
       dryRun,
+      directAttempt: request.query.direct === "true",
       participantIndex:
         typeof request.query.participantIndex === "string"
           ? request.query.participantIndex

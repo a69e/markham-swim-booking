@@ -72,7 +72,7 @@ export default async function handler(request, response) {
     );
 
     let updated = 0;
-    let expired = 0;
+    let deleted = 0;
     let checkoutExpired = 0;
     const now = new Date();
 
@@ -93,20 +93,22 @@ export default async function handler(request, response) {
 
       if (ended) {
         await db`
+          delete from queued_sessions
+          where id = ${row.id}
+            and status in ('queued', 'action_required')
+        `;
+        if (row.status === "queued" || row.status === "action_required") {
+          deleted += 1;
+          continue;
+        }
+        await db`
           update queued_sessions
-          set status = case when status = 'registered' then status else 'expired' end,
-              session = ${JSON.stringify(nextSession)},
+          set session = ${JSON.stringify(nextSession)},
               start_at = coalesce(${startAt}, start_at),
               end_at = coalesce(${endAt}, end_at),
-              last_attempt_at = now(),
-              last_error = case
-                when status = 'registered' then last_error
-                else 'Session has ended.'
-              end,
               updated_at = now()
           where id = ${row.id}
         `;
-        expired += 1;
         continue;
       }
 
@@ -151,7 +153,7 @@ export default async function handler(request, response) {
       liveCount: liveSessions.length,
       trackedCount: trackedRows.length,
       updated,
-      expired,
+      deleted,
       checkoutExpired,
       syncedAt: new Date().toISOString(),
     });

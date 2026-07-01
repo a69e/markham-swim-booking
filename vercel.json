@@ -25,5 +25,11 @@
     "api/queue-worker.js": {
       "maxDuration": 30
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/queue-worker",
+      "schedule": "* * * * *"
+    }
+  ]
 }

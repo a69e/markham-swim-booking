@@ -1,4 +1,5 @@
 import { ensureQueueSchema, getSql } from "../lib/db.js";
+import { fetchLiveClassPages } from "../lib/live-classes.js";
 import { attemptQueuedRegistration } from "./register.js";
 
 function cronAuthorized(request) {
@@ -22,6 +23,7 @@ async function activeQueuedRows(db) {
       and queued_sessions.auto_register = true
       and account_attendees.has_free_pass = true
       and (queued_sessions.end_at is null or queued_sessions.end_at > now())
+      and coalesce(queued_sessions.session->>'action', '') ilike '%register%'
       and (
         queued_sessions.last_attempt_at is null
         or queued_sessions.last_attempt_at < now() - interval '55 seconds'
@@ -29,6 +31,84 @@ async function activeQueuedRows(db) {
     order by queued_sessions.start_at nulls last, queued_sessions.created_at
     limit 3
   `;
+}
+
+function sessionKey(session) {
+  return [
+    session?.service || "",
+    session?.date || "",
+    session?.timeRange || "",
+    session?.location || "",
+  ].join("|");
+}
+
+function liveKey(session) {
+  return `${session?.eventId || ""}|${session?.occurrenceDate || ""}`;
+}
+
+function parsePerfectMindDate(value) {
+  if (!value || typeof value !== "string") return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function parseSessionTimes(session) {
+  const start = parsePerfectMindDate(session?.startDateTime);
+  const end = parsePerfectMindDate(session?.endDateTime);
+  return {
+    startAt: start ? start.toISOString() : null,
+    endAt: end ? end.toISOString() : null,
+  };
+}
+
+async function syncQueuedRowsWithLiveClasses(db) {
+  const rows = await db`
+    select *
+    from queued_sessions
+    where status in ('queued', 'action_required')
+  `;
+  if (!rows.length) return { updated: 0, deleted: 0 };
+
+  const liveSessions = await fetchLiveClassPages(6);
+  const byLiveKey = new Map(liveSessions.map((session) => [liveKey(session), session]));
+  const bySessionKey = new Map(liveSessions.map((session) => [sessionKey(session), session]));
+  let updated = 0;
+  let deleted = 0;
+
+  for (const row of rows) {
+    const rowLiveKey = liveKey(row.session);
+    const current =
+      (rowLiveKey !== "|" ? byLiveKey.get(rowLiveKey) : null) ||
+      bySessionKey.get(row.session_key);
+    const nextSession = current || row.session || {};
+    const { startAt, endAt } = parseSessionTimes(nextSession);
+    const endedAt = endAt || row.end_at;
+    const ended = endedAt && new Date(endedAt) < new Date();
+
+    if (ended) {
+      await db`
+        delete from queued_sessions
+        where id = ${row.id}
+          and status in ('queued', 'action_required')
+      `;
+      deleted += 1;
+      continue;
+    }
+
+    if (current) {
+      await db`
+        update queued_sessions
+        set session = ${JSON.stringify(nextSession)},
+            start_at = coalesce(${startAt}, start_at),
+            end_at = coalesce(${endAt}, end_at),
+            updated_at = now()
+        where id = ${row.id}
+      `;
+      updated += 1;
+    }
+  }
+
+  return { updated, deleted };
 }
 
 export default async function handler(request, response) {
@@ -46,6 +126,7 @@ export default async function handler(request, response) {
 
     await ensureQueueSchema();
     const db = getSql();
+    const liveSync = await syncQueuedRowsWithLiveClasses(db);
     const rows = await activeQueuedRows(db);
     const results = [];
 
@@ -83,6 +164,7 @@ export default async function handler(request, response) {
     response.setHeader("Cache-Control", "no-store");
     response.status(200).json({
       ok: true,
+      liveSync,
       checked: rows.length,
       results,
     });

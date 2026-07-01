@@ -447,6 +447,12 @@ summary {
   color: #69696b;
 }
 
+.session-action button.registered,
+.session-action button:disabled.registered {
+  background: #2f8f46;
+  color: #ffffff;
+}
+
 .session-action button:disabled {
   cursor: default;
 }

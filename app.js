@@ -220,6 +220,7 @@ async function attemptRegistration(session) {
 }
 
 async function registerFromRow(session, button) {
+  if (button.disabled) return;
   const previousText = button.textContent;
   button.textContent = "Registering...";
   button.disabled = true;
@@ -227,7 +228,7 @@ async function registerFromRow(session, button) {
   try {
     await attemptRegistration(session);
     button.textContent = "Registered";
-    button.className = "queued";
+    button.className = "registered";
     button.disabled = true;
   } catch (error) {
     if (error.message.includes("not confirmed")) {
@@ -455,6 +456,11 @@ function renderSessions() {
     const queueKey = queuedSessionKey(session);
     const isRegistered = registeredKeys.has(queueKey);
     const isQueued = queuedKeys.has(queueKey);
+    row.dataset.key = queueKey;
+    row.dataset.registerable =
+      !isRegistered && !isQueued && isRegisterAction(session.action) && session.url
+        ? "true"
+        : "false";
     button.textContent = isRegistered
       ? "Registered"
       : isRegisterAction(session.action)
@@ -462,7 +468,7 @@ function renderSessions() {
       : isQueued
         ? "Queued"
         : "Queue";
-    button.className = isRegistered || isQueued ? "queued" : buttonClass;
+    button.className = isRegistered ? "registered" : isQueued ? "queued" : buttonClass;
     button.disabled = buttonClass === "full" || isRegistered || isQueued;
     if (!isRegistered && !isQueued && isRegisterAction(session.action) && session.url) {
       serviceLink.href = "#";
@@ -508,6 +514,22 @@ function renderSessions() {
       ? "Loading more..."
       : "";
 }
+
+sessionList.addEventListener("click", (event) => {
+  const row = event.target.closest(".session-row");
+  if (!row || row.dataset.registerable !== "true") return;
+
+  const clickedAction = event.target.closest(".session-action");
+  const clickedService = event.target.closest(".session-main");
+  if (!clickedAction && !clickedService) return;
+
+  event.preventDefault();
+  const session = filteredSessions.find(
+    (item) => queuedSessionKey(item) === row.dataset.key,
+  );
+  const button = row.querySelector(".session-action button");
+  if (session && button) registerFromRow(session, button);
+});
 
 function refreshFilters() {
   resetFilter(locationOptions, uniqueValues("location"));

@@ -191,7 +191,7 @@ summary {
 
 .status-filters {
   display: flex;
-  gap: 14px;
+  gap: 10px;
   padding: 9px 12px;
   background: #fbfbfb;
   border-bottom: 1px solid var(--line);
@@ -203,7 +203,7 @@ summary {
   gap: 7px;
   min-height: 28px;
   color: #302d3b;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.2;
 }
 
@@ -464,6 +464,10 @@ summary {
   color: #69696b;
   font-size: 10px;
   line-height: 1.25;
+  max-width: 100%;
+  overflow: hidden;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .session-action button:disabled {

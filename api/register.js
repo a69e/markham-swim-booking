@@ -1093,6 +1093,23 @@ async function submitUrlEncodedForm(action, body, cookie, referer) {
   return { response, finalUrl: currentUrl, redirects, html, cookie: currentCookie };
 }
 
+function extractStoreCheckoutUrl(html, baseUrl) {
+  const urls = [];
+  for (const match of String(html || "").matchAll(
+    /(?:src|href)=["']([^"']*store-ca\.perfectmind\.com[^"']*(?:login-and-go-to-checkout|checkout)[^"']*)["']/gi,
+  )) {
+    urls.push(absoluteUrl(match[1], baseUrl));
+  }
+
+  for (const match of String(html || "").matchAll(
+    /["'](https:\/\/store-ca\.perfectmind\.com[^"']*(?:login-and-go-to-checkout|checkout)[^"']*)["']/gi,
+  )) {
+    urls.push(absoluteUrl(match[1], baseUrl));
+  }
+
+  return uniqueUrls(urls).find(Boolean) || "";
+}
+
 function analyzeRegistrationPage(html, finalUrl) {
   const text = safeText(html, 4000).toLowerCase();
   const title = pageTitle(html);
@@ -1107,6 +1124,7 @@ function analyzeRegistrationPage(html, finalUrl) {
   return {
     title,
     finalUrl,
+    checkoutUrl: extractStoreCheckoutUrl(html, finalUrl),
     success,
     login,
     needsPayment,
@@ -1123,6 +1141,7 @@ function summarizeRegistrationResult(result) {
   return {
     title: result.title,
     finalUrl: result.finalUrl,
+    checkoutUrl: result.checkoutUrl || "",
     success: result.success,
     login: result.login,
     needsPayment: result.needsPayment,
@@ -1335,8 +1354,10 @@ function checkoutRequiredFromResult(result) {
   if (!result) return false;
   return (
     result.needsPayment ||
+    Boolean(result.checkoutUrl) ||
     /checkout|shoppingcartkey|membercheckout/i.test(result.finalUrl || "") ||
     (result.extraSteps || []).some((step) =>
+      step.result?.checkoutUrl ||
       /checkout|shoppingcartkey|membercheckout/i.test(
         `${step.action || ""} ${step.result?.finalUrl || ""} ${step.result?.title || ""}`,
       ),
@@ -1347,10 +1368,20 @@ function checkoutRequiredFromResult(result) {
 function checkoutUrlFromResult(result) {
   if (!result) return "";
   const candidates = [
+    result.checkoutUrl,
+    ...(result.extraSteps || []).map((step) => step.result?.checkoutUrl),
     result.finalUrl,
     ...(result.extraSteps || []).map((step) => step.result?.finalUrl),
   ].filter(Boolean);
-  return candidates.reverse().find((url) => /checkout|shoppingcartkey|membercheckout/i.test(url)) || "";
+  return (
+    candidates.find((url) =>
+      /login-and-go-to-checkout|store-ca\.perfectmind\.com/i.test(url),
+    ) ||
+    candidates.find((url) =>
+      /checkout|shoppingcartkey|membercheckout/i.test(url),
+    ) ||
+    ""
+  );
 }
 
 async function markActionRequired(db, queued, checkoutUrl) {

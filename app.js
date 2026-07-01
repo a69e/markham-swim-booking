@@ -22,6 +22,7 @@ const locationSummary = document.querySelector("#locationSummary");
 const serviceSummary = document.querySelector("#serviceSummary");
 const queuedOnlyToggle = document.querySelector("#queuedOnlyToggle");
 const registeredOnlyToggle = document.querySelector("#registeredOnlyToggle");
+const checkoutOnlyToggle = document.querySelector("#checkoutOnlyToggle");
 const sessionList = document.querySelector("#sessionList");
 const resultCount = document.querySelector("#resultCount");
 const loadTrigger = document.querySelector("#loadTrigger");
@@ -97,9 +98,10 @@ function getFilteredSessions() {
   const selectedServices = selectedValues(serviceOptions);
   const onlyQueued = queuedOnlyToggle.checked;
   const onlyRegistered = registeredOnlyToggle.checked;
+  const onlyCheckout = checkoutOnlyToggle.checked;
   const sourceSessions = [...sessions];
 
-  if (onlyQueued || onlyRegistered) {
+  if (onlyQueued || onlyRegistered || onlyCheckout) {
     const seen = new Set(sourceSessions.map(queuedSessionKey));
     trackedSessions.forEach((session) => {
       const key = queuedSessionKey(session);
@@ -117,15 +119,20 @@ function getFilteredSessions() {
     const serviceMatch =
       selectedServices.length === 0 || selectedServices.includes(session.service);
     const statusMatch =
-      (!onlyQueued && !onlyRegistered) ||
+      (!onlyQueued && !onlyRegistered && !onlyCheckout) ||
       (onlyQueued && queuedKeys.has(key)) ||
-      (onlyRegistered && registeredKeys.has(key));
+      (onlyRegistered && registeredKeys.has(key)) ||
+      (onlyCheckout && actionRequiredKeys.has(key));
     return locationMatch && serviceMatch && statusMatch;
   });
 }
 
 function statusFilterActive() {
-  return queuedOnlyToggle.checked || registeredOnlyToggle.checked;
+  return (
+    queuedOnlyToggle.checked ||
+    registeredOnlyToggle.checked ||
+    checkoutOnlyToggle.checked
+  );
 }
 
 function actionClass(action) {
@@ -148,15 +155,30 @@ function attemptText(key) {
   if (!attempt?.lastAttemptAt) return "";
 
   const date = new Date(attempt.lastAttemptAt);
-  const time = Number.isNaN(date.getTime())
-    ? attempt.lastAttemptAt
-    : date.toLocaleString([], {
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      });
-  return time;
+  if (Number.isNaN(date.getTime())) return `last action: ${attempt.lastAttemptAt}`;
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const value = (type) => parts.find((part) => part.type === type)?.value || "";
+  return `last action: ${value("month")} ${value("day")} ${value("hour")}:${value("minute")}`;
+}
+
+function fitOneLine(element, maxSize = 10, minSize = 7) {
+  element.style.fontSize = `${maxSize}px`;
+  element.style.whiteSpace = "nowrap";
+
+  requestAnimationFrame(() => {
+    let size = maxSize;
+    while (size > minSize && element.scrollWidth > element.clientWidth) {
+      size -= 0.5;
+      element.style.fontSize = `${size}px`;
+    }
+  });
 }
 
 function deviceId() {
@@ -669,6 +691,7 @@ function renderSessions() {
       meta.className = "attempt-meta";
       meta.textContent = attempt;
       actionPanel.append(meta);
+      fitOneLine(meta);
     }
 
     sessionList.append(row);
@@ -758,11 +781,24 @@ function resetVisibleList() {
 locationOptions.addEventListener("change", resetVisibleList);
 serviceOptions.addEventListener("change", resetVisibleList);
 queuedOnlyToggle.addEventListener("change", () => {
-  if (queuedOnlyToggle.checked) registeredOnlyToggle.checked = false;
+  if (queuedOnlyToggle.checked) {
+    registeredOnlyToggle.checked = false;
+    checkoutOnlyToggle.checked = false;
+  }
   resetVisibleList();
 });
 registeredOnlyToggle.addEventListener("change", () => {
-  if (registeredOnlyToggle.checked) queuedOnlyToggle.checked = false;
+  if (registeredOnlyToggle.checked) {
+    queuedOnlyToggle.checked = false;
+    checkoutOnlyToggle.checked = false;
+  }
+  resetVisibleList();
+});
+checkoutOnlyToggle.addEventListener("change", () => {
+  if (checkoutOnlyToggle.checked) {
+    queuedOnlyToggle.checked = false;
+    registeredOnlyToggle.checked = false;
+  }
   resetVisibleList();
 });
 

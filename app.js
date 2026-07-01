@@ -17,6 +17,7 @@ let trackedSessions = [];
 let queueApiAvailable = true;
 let refreshInFlight = false;
 let busyDepth = 0;
+const busyControlStates = new WeakMap();
 let pullStartY = 0;
 let pullDistance = 0;
 let pullTracking = false;
@@ -24,6 +25,7 @@ let pullTracking = false;
 const pullRefresh = document.querySelector("#pullRefresh");
 const busyOverlay = document.querySelector("#busyOverlay");
 const busyLabel = document.querySelector("#busyLabel");
+const appShell = document.querySelector(".app-shell");
 const locationOptions = document.querySelector("#locationOptions");
 const serviceOptions = document.querySelector("#serviceOptions");
 const locationSummary = document.querySelector("#locationSummary");
@@ -233,6 +235,21 @@ function setBusy(active, label = "Syncing...") {
   document.body.classList.toggle("is-busy", busy);
   busyOverlay.hidden = !busy;
   if (busy) busyLabel.textContent = label;
+  appShell.inert = busy;
+
+  document
+    .querySelectorAll("button, input, select, textarea")
+    .forEach((control) => {
+      if (busy) {
+        if (!busyControlStates.has(control)) {
+          busyControlStates.set(control, control.disabled);
+        }
+        control.disabled = true;
+      } else if (busyControlStates.has(control)) {
+        control.disabled = busyControlStates.get(control);
+        busyControlStates.delete(control);
+      }
+    });
 }
 
 async function withBusy(label, task) {
@@ -243,6 +260,18 @@ async function withBusy(label, task) {
     setBusy(false);
   }
 }
+
+["click", "change", "input", "submit", "touchstart", "pointerdown"].forEach((eventName) => {
+  document.addEventListener(
+    eventName,
+    (event) => {
+      if (busyDepth <= 0 || event.target.closest(".busy-overlay")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true,
+  );
+});
 
 function deviceId() {
   let id = localStorage.getItem("markhamSwimDeviceId");
@@ -381,6 +410,8 @@ async function registerFromRow(session, button) {
       queuedKeys.delete(key);
       sessionStatuses.set(key, "failed");
       button.textContent = "Failed";
+      await loadQueuedSessions();
+      renderSessions();
       setTimeout(() => {
         button.textContent = previousText;
         button.disabled = false;
@@ -993,7 +1024,7 @@ setInterval(updateCountdownLabels, 1000);
 window.addEventListener(
   "touchstart",
   (event) => {
-    if (window.scrollY > 0 || refreshInFlight) return;
+    if (busyDepth > 0 || window.scrollY > 0 || refreshInFlight) return;
     pullStartY = event.touches[0].clientY;
     pullDistance = 0;
     pullTracking = true;
@@ -1004,6 +1035,7 @@ window.addEventListener(
 window.addEventListener(
   "touchmove",
   (event) => {
+    if (busyDepth > 0) return;
     if (!pullTracking) return;
     pullDistance = Math.max(0, event.touches[0].clientY - pullStartY);
     if (pullDistance < 18) return;
@@ -1019,6 +1051,7 @@ window.addEventListener(
 );
 
 window.addEventListener("touchend", () => {
+  if (busyDepth > 0) return;
   if (!pullTracking) return;
   const shouldRefresh = pullDistance > 84;
   pullTracking = false;

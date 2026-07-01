@@ -69,7 +69,7 @@ export default async function handler(request, response) {
 
     const scope = await accountScopeForDevice(db, deviceId);
     const trackedRows = await rowsForScope(db, deviceId, scope.accountIds);
-    const liveSessions = await fetchLiveClassPages(3);
+    const liveSessions = await fetchLiveClassPages(1);
     const byLiveKey = new Map(liveSessions.map((session) => [liveKey(session), session]));
     const bySessionKey = new Map(
       liveSessions.map((session) => [sessionKey(session), session]),
@@ -79,11 +79,13 @@ export default async function handler(request, response) {
     let deleted = 0;
     let checkoutExpired = 0;
     let officialRegistered = 0;
+    let officialUnregistered = 0;
     let officialImported = 0;
     const now = new Date();
     const hasActionRequiredRows = trackedRows.some(
       (row) => row.status === "action_required",
     );
+    let officialStatusChecks = 0;
 
     for (const row of trackedRows) {
       const rowLiveKey = liveKey(row.session);
@@ -142,7 +144,11 @@ export default async function handler(request, response) {
         continue;
       }
 
-      if (row.status === "action_required") {
+      if (
+        (row.status === "action_required" || row.status === "registered") &&
+        officialStatusChecks < 3
+      ) {
+        officialStatusChecks += 1;
         const officialStatus = await probeOfficialRegistrationStatus(db, {
           ...row,
           session: nextSession,
@@ -168,6 +174,15 @@ export default async function handler(request, response) {
           officialRegistered += 1;
           continue;
         }
+        if (row.status === "registered" && officialStatus.ok) {
+          await db`
+            delete from queued_sessions
+            where id = ${row.id}
+              and status = 'registered'
+          `;
+          officialUnregistered += 1;
+          continue;
+        }
       }
 
       if (current) {
@@ -186,7 +201,7 @@ export default async function handler(request, response) {
     if (scope.account && !hasActionRequiredRows) {
       const probeLimit = Math.max(
         0,
-        Math.min(4, Number(request.query.officialImportLimit || 2) || 2),
+        Math.min(4, Number(request.query.officialImportLimit || 0) || 0),
       );
       const importProbe = await probeOfficialRegisteredParticipants(
         scope.account,
@@ -261,6 +276,7 @@ export default async function handler(request, response) {
       deleted,
       checkoutExpired,
       officialRegistered,
+      officialUnregistered,
       officialImported,
       syncedAt: new Date().toISOString(),
     });

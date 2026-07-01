@@ -10,6 +10,7 @@ let isLoadingMore = false;
 let queuedKeys = new Set();
 let registeredKeys = new Set();
 let sessionStatuses = new Map();
+let sessionAttempts = new Map();
 let trackedSessions = [];
 let queueApiAvailable = true;
 
@@ -137,6 +138,23 @@ function queuedSessionKey(session) {
   return [session.service, session.date, session.timeRange, session.location].join("|");
 }
 
+function attemptText(key) {
+  const attempt = sessionAttempts.get(key);
+  if (!attempt?.lastAttemptAt) return "";
+
+  const date = new Date(attempt.lastAttemptAt);
+  const time = Number.isNaN(date.getTime())
+    ? attempt.lastAttemptAt
+    : date.toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+  const error = attempt.lastError ? ` · ${attempt.lastError}` : "";
+  return `Last check: ${time}${error}`;
+}
+
 function deviceId() {
   let id = localStorage.getItem("markhamSwimDeviceId");
   if (!id) {
@@ -150,6 +168,7 @@ async function loadQueuedSessions() {
   queuedKeys = new Set();
   registeredKeys = new Set();
   sessionStatuses = new Map();
+  sessionAttempts = new Map();
   trackedSessions = [];
 
   try {
@@ -162,6 +181,10 @@ async function loadQueuedSessions() {
       const sessionIsPast =
         sessionEndedAt && !Number.isNaN(sessionEndedAt.getTime()) && sessionEndedAt < new Date();
       sessionStatuses.set(item.session_key, item.status);
+      sessionAttempts.set(item.session_key, {
+        lastAttemptAt: item.last_attempt_at || "",
+        lastError: item.last_error || "",
+      });
       if (item.status === "registered") {
         registeredKeys.add(item.session_key);
       } else if (item.status === "queued") {
@@ -451,6 +474,7 @@ function renderSessions() {
     row.querySelector(".session-location").textContent = session.location;
     row.querySelector(".session-action p").textContent = session.spots || "";
 
+    const actionPanel = row.querySelector(".session-action");
     const button = row.querySelector("button");
     const buttonClass = actionClass(session.action);
     const queueKey = queuedSessionKey(session);
@@ -463,10 +487,10 @@ function renderSessions() {
         : "false";
     button.textContent = isRegistered
       ? "Registered"
-      : isRegisterAction(session.action)
-      ? "Register"
       : isQueued
         ? "Queued"
+        : isRegisterAction(session.action)
+          ? "Register"
         : "Queue";
     button.className = isRegistered ? "registered" : isQueued ? "queued" : buttonClass;
     button.disabled = buttonClass === "full" || isRegistered || isQueued;
@@ -502,6 +526,14 @@ function renderSessions() {
     } else {
       serviceLink.href = session.url || "#";
       if (!session.url) serviceLink.removeAttribute("href");
+    }
+
+    const attempt = attemptText(queueKey);
+    if (attempt && (isQueued || isRegistered)) {
+      const meta = document.createElement("small");
+      meta.className = "attempt-meta";
+      meta.textContent = attempt;
+      actionPanel.append(meta);
     }
 
     sessionList.append(row);

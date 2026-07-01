@@ -453,6 +453,14 @@ summary {
   color: #ffffff;
 }
 
+.attempt-meta {
+  display: block;
+  margin-top: 4px;
+  color: #69696b;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
 .session-action button:disabled {
   cursor: default;
 }

@@ -1,6 +1,17 @@
 import { ensureQueueSchema, getSql } from "./db.js";
 import { attemptQueuedRegistration } from "./register.js";
 
+function cronAuthorized(request) {
+  const secret = process.env.CRON_SECRET || "";
+  if (!secret) return true;
+
+  const token =
+    request.headers["x-cron-secret"] ||
+    request.query?.token ||
+    "";
+  return token === secret;
+}
+
 async function activeQueuedRows(db) {
   return db`
     select queued_sessions.*
@@ -28,6 +39,11 @@ export default async function handler(request, response) {
   }
 
   try {
+    if (!cronAuthorized(request)) {
+      response.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
     await ensureQueueSchema();
     const db = getSql();
     const rows = await activeQueuedRows(db);

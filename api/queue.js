@@ -99,6 +99,8 @@ export default async function handler(request, response) {
           queued_sessions.start_at,
           queued_sessions.end_at,
           queued_sessions.registered_at,
+          queued_sessions.last_attempt_at,
+          queued_sessions.last_error,
           queued_sessions.created_at,
           queued_sessions.attendee_id,
           account_attendees.full_name as attendee_name,

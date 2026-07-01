@@ -29,8 +29,6 @@ const accountDialog = document.querySelector("#accountDialog");
 const accountMenu = document.querySelector("#accountMenu");
 const accountDropdown = document.querySelector("#accountDropdown");
 const accountManage = document.querySelector("#accountManage");
-const accountDebug = document.querySelector("#accountDebug");
-const accountProbe = document.querySelector("#accountProbe");
 const attendeeMenu = document.querySelector("#attendeeMenu");
 const accountLogout = document.querySelector("#accountLogout");
 const accountForm = document.querySelector("#accountForm");
@@ -586,14 +584,6 @@ accountButton.addEventListener("click", () => {
 
 accountManage.addEventListener("click", () => {
   window.location.href = "https://cityofmarkham.perfectmind.com/Clients/Contact";
-});
-
-accountDebug.addEventListener("click", () => {
-  window.location.href = `./api/debug?deviceId=${encodeURIComponent(deviceId())}`;
-});
-
-accountProbe.addEventListener("click", () => {
-  window.location.href = `./api/register?deviceId=${encodeURIComponent(deviceId())}&dryRun=true`;
 });
 
 accountLogout.addEventListener("click", () => {

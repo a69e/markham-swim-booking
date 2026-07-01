@@ -72,7 +72,7 @@ async function defaultAttendeeForDevice(db, deviceId) {
     throw new Error("Please login before using Queue or automatic Register.");
   }
   if (!rows[0].attendee_id) {
-    throw new Error("Please open Probe queue once after login so attendees can be loaded.");
+    throw new Error("Attendees were not loaded during login. Please login again.");
   }
   if (!rows[0].has_free_pass) {
     throw new Error(`${rows[0].full_name} does not have a free pass. Automatic registration is disabled for paid registrations.`);

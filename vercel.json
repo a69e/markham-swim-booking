@@ -1,6 +1,9 @@
 {
   "version": 2,
   "functions": {
+    "api/account.js": {
+      "maxDuration": 30
+    },
     "api/classes.js": {
       "maxDuration": 30
     },

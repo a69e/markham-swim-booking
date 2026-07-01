@@ -1,5 +1,6 @@
 import { encryptText, encryptionConfigured } from "./crypto.js";
 import { ensureQueueSchema, getSql } from "./db.js";
+import { syncAttendeesFromOfficialSite } from "./attendee-sync.js";
 
 const BASE_URL = "https://cityofmarkham.perfectmind.com";
 const BOOKING_URL =
@@ -333,7 +334,7 @@ export default async function handler(request, response) {
       const encryptedSession = encryptText(JSON.stringify(loginSession));
       const userAgent = request.headers["user-agent"] || "";
 
-      await db`
+      const accountRows = await db`
         insert into account_credentials (
           device_id,
           email,
@@ -369,7 +370,18 @@ export default async function handler(request, response) {
           user_agent = excluded.user_agent,
           session = excluded.session,
           updated_at = now()
+        returning id
       `;
+      const accountId = accountRows[0].id;
+      const attendeeSync = await syncAttendeesFromOfficialSite(
+        db,
+        accountId,
+        loginSession.cookie,
+        {
+          email: body.email.trim(),
+          password: body.password,
+        },
+      );
 
       const displayRows = await db`
         select
@@ -390,6 +402,7 @@ export default async function handler(request, response) {
         email: body.email.trim(),
         fullName: displayRows[0]?.full_name || loginSession.fullName || "",
         displayName,
+        attendeeSync,
       });
       return;
     }

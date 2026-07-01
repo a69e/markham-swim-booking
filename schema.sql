@@ -16,6 +16,7 @@ create table if not exists queued_sessions (
   id bigserial primary key,
   device_id text not null,
   account_id bigint references account_credentials(id) on delete set null,
+  attendee_id bigint,
   session_key text not null,
   session jsonb not null,
   status text not null default 'queued',
@@ -33,8 +34,7 @@ create table if not exists queued_sessions (
   notified_at timestamptz,
   notification_error text,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique (device_id, session_key)
+  updated_at timestamptz not null default now()
 );
 
 create table if not exists account_attendees (
@@ -68,3 +68,6 @@ create table if not exists push_subscriptions (
   last_success_at timestamptz,
   last_error text
 );
+
+create unique index if not exists queued_sessions_device_attendee_session_key_idx
+on queued_sessions (device_id, attendee_id, session_key);

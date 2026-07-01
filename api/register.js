@@ -5,6 +5,7 @@ import { verifyPerfectMindLogin } from "./account.js";
 import { sendCheckoutNotification } from "../lib/notifications.js";
 
 const BASE_URL = "https://cityofmarkham.perfectmind.com";
+const WIDGET_ID = "6825ea71-e5b7-4c2a-948f-9195507ad90a";
 const DEFAULT_DRY_RUN = true;
 const MONTHS = {
   jan: 0,
@@ -34,6 +35,15 @@ function validateDeviceId(deviceId) {
   if (typeof deviceId !== "string" || deviceId.length < 8) {
     throw new Error("A valid deviceId is required.");
   }
+}
+
+function sessionKey(session) {
+  return [
+    session?.service || "",
+    session?.date || "",
+    session?.timeRange || "",
+    session?.location || "",
+  ].join("|");
 }
 
 function htmlDecode(value) {
@@ -699,6 +709,78 @@ function buildParticipantSelectionSubmission(html, baseUrl, attendee) {
   };
 }
 
+function classifyParticipantStatus(html, baseUrl, attendee) {
+  const details = extractFormDetails(html, baseUrl).find(
+    (form) => form.id === "eventParticipantsSelection",
+  );
+  if (!details) return { found: false, registeredLikely: false };
+
+  const selectedRecord = extractAttendeeRecords(html).find(
+    (record) =>
+      record.memberId === attendee.member_id ||
+      record.fullName.toLowerCase() === String(attendee.full_name || "").toLowerCase(),
+  );
+  if (!selectedRecord) return { found: false, registeredLikely: false };
+
+  const selectedParticipant = details.participants.find(
+    (participant) => participant.index === selectedRecord.index,
+  );
+  const otherSelectable = details.participants.some(
+    (participant) => participant.index !== selectedRecord.index && !participant.disabled,
+  );
+  const buttonText = extractButtons(html)
+    .map((button) => button.text)
+    .join(" ");
+
+  return {
+    found: true,
+    selectedIndex: selectedRecord.index,
+    selectedLabel: selectedRecord.fullName,
+    selectedDisabled: Boolean(selectedParticipant?.disabled),
+    otherSelectable,
+    buttonText: safeText(buttonText, 160),
+    registeredLikely: Boolean(selectedParticipant?.disabled && otherSelectable),
+  };
+}
+
+function classifyAllParticipantStatuses(html, baseUrl) {
+  const details = extractFormDetails(html, baseUrl).find(
+    (form) => form.id === "eventParticipantsSelection",
+  );
+  if (!details) return [];
+
+  return extractAttendeeRecords(html).map((record) => {
+    const selectedParticipant = details.participants.find(
+      (participant) => participant.index === record.index,
+    );
+    const otherSelectable = details.participants.some(
+      (participant) => participant.index !== record.index && !participant.disabled,
+    );
+
+    return {
+      ...record,
+      selectedDisabled: Boolean(selectedParticipant?.disabled),
+      otherSelectable,
+      registeredLikely: Boolean(selectedParticipant?.disabled && otherSelectable),
+    };
+  });
+}
+
+function directParticipantUrl(session) {
+  if (!session?.eventId || !session?.occurrenceDate || !session?.locationId) {
+    return "";
+  }
+
+  const params = new URLSearchParams({
+    eventId: session.eventId,
+    occurrenceDate: session.occurrenceDate,
+    widgetId: WIDGET_ID,
+    locationId: session.locationId,
+    waitListMode: "False",
+  });
+  return `${BASE_URL}/SocialSite/BookMe4EventParticipants?${params}`;
+}
+
 function buildFormSubmission(html, baseUrl, formId) {
   const formHtml = extractFormHtml(html, formId);
   if (!formHtml) return null;
@@ -1293,6 +1375,146 @@ async function attendeeForQueuedSession(db, queued, account) {
   return rows[0];
 }
 
+export async function probeOfficialRegistrationStatus(db, queued) {
+  const queuedAccountId = Number(queued.account_id || 0);
+  const accountRows = await db`
+    select *
+    from account_credentials
+    where id = ${queuedAccountId}
+       or device_id = ${queued.device_id}
+    order by case when id = ${queuedAccountId} then 0 else 1 end
+    limit 1
+  `;
+  if (!accountRows.length) {
+    return { ok: false, error: "No saved login for this device." };
+  }
+
+  const account = accountRows[0];
+  const attendee = await attendeeForQueuedSession(db, queued, account);
+  const password = decryptText({
+    cipher: account.password_cipher,
+    iv: account.password_iv,
+    tag: account.password_tag,
+  });
+  const classUrl = queued.session?.url;
+  if (!classUrl) return { ok: false, error: "Queued session does not have a class URL." };
+
+  const login = await verifyPerfectMindLogin(account.email, password, classUrl);
+  const classPage = await fetchHtmlWithRedirects(classUrl, login.cookie);
+  const hints = classPage.html
+    ? extractRegisterHints(classPage.html, classPage.finalUrl)
+    : null;
+  const registerUrl = findRegisterUrl(hints || {});
+  const registerCandidates = uniqueUrls([
+    socialSiteRegisterUrl(registerUrl),
+    registerUrl,
+  ]);
+
+  for (const url of registerCandidates) {
+    const socialSiteLogin = /\/SocialSite\//i.test(url)
+      ? await verifyPerfectMindLogin(account.email, password, url)
+      : null;
+    const directPage = await fetchHtmlWithRedirects(
+      url,
+      socialSiteLogin?.cookie || classPage.cookie || login.cookie,
+    );
+    let page = directPage;
+    let pageHints = page.html ? extractRegisterHints(page.html, page.finalUrl) : null;
+
+    if (!pageHints?.looksLoggedIn) {
+      const participantLogin = await verifyPerfectMindLogin(account.email, password, url);
+      const reloggedPage = await fetchHtmlWithRedirects(url, participantLogin.cookie);
+      page = reloggedPage;
+      pageHints = page.html ? extractRegisterHints(page.html, page.finalUrl) : null;
+      if (!pageHints?.looksLoggedIn) {
+        const formLogin = await submitLoginForm(reloggedPage, account.email, password);
+        if (formLogin?.html) {
+          page = formLogin;
+          pageHints = extractRegisterHints(formLogin.html, formLogin.finalUrl);
+        }
+      }
+    }
+
+    const participantStatus = classifyParticipantStatus(
+      page.html || "",
+      page.finalUrl,
+      attendee,
+    );
+    if (participantStatus.found) {
+      return {
+        ok: true,
+        attendee: {
+          id: attendee.id,
+          fullName: attendee.full_name,
+          hasFreePass: attendee.has_free_pass,
+        },
+        registerUrl,
+        participantUrl: page.finalUrl,
+        looksLoggedIn: Boolean(pageHints?.looksLoggedIn),
+        ...participantStatus,
+      };
+    }
+  }
+
+  return { ok: false, error: "Selected attendee was not found on the official registration page." };
+}
+
+export async function probeOfficialRegisteredParticipants(account, sessions, limit = 4) {
+  const password = decryptText({
+    cipher: account.password_cipher,
+    iv: account.password_iv,
+    tag: account.password_tag,
+  });
+  const candidates = sessions
+    .filter((session) => /register/i.test(session?.action || ""))
+    .filter((session) => directParticipantUrl(session))
+    .slice(0, limit);
+
+  if (!candidates.length) return { checked: 0, registered: [], errors: [] };
+
+  let cookie = "";
+  const registered = [];
+  const errors = [];
+
+  for (const session of candidates) {
+    const url = directParticipantUrl(session);
+    try {
+      let page;
+      if (!cookie) {
+        const login = await verifyPerfectMindLogin(account.email, password, url);
+        cookie = login.cookie || "";
+        page = await fetchHtmlWithRedirects(url, cookie);
+      } else {
+        page = await fetchHtmlWithRedirects(url, cookie);
+      }
+
+      let hints = page.html ? extractRegisterHints(page.html, page.finalUrl) : null;
+      if (!hints?.looksLoggedIn) {
+        const relogin = await verifyPerfectMindLogin(account.email, password, url);
+        cookie = relogin.cookie || cookie;
+        page = await fetchHtmlWithRedirects(url, cookie);
+        hints = page.html ? extractRegisterHints(page.html, page.finalUrl) : null;
+      }
+
+      classifyAllParticipantStatuses(page.html || "", page.finalUrl)
+        .filter((status) => status.registeredLikely)
+        .forEach((status) => {
+          registered.push({
+            memberId: status.memberId,
+            fullName: status.fullName,
+            session,
+            participantUrl: page.finalUrl,
+          });
+        });
+      cookie = page.cookie || cookie;
+    } catch (error) {
+      errors.push({ key: sessionKey(session), error: error.message });
+    }
+  }
+
+  return { checked: candidates.length, registered, errors };
+}
+
 function extractRegisterHints(html, baseUrl) {
   return {
     title: pageTitle(html),
@@ -1644,6 +1866,7 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
     let officialSubmission = null;
     let officialPreflight = null;
     let officialSubmissionResult = null;
+    let officialParticipantStatus = null;
 
     for (const url of registerCandidates) {
       const socialSiteLogin = /\/SocialSite\//i.test(url)
@@ -1689,6 +1912,13 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
           formLogin?.finalUrl || reloggedPage.finalUrl,
           attendee,
         );
+        officialParticipantStatus =
+          officialParticipantStatus ||
+          classifyParticipantStatus(
+            participantHtml,
+            formLogin?.finalUrl || reloggedPage.finalUrl,
+            attendee,
+          );
         if (!officialSubmission && !submission.error) {
           const official = await submitOfficialParticipantSelection({
             html: participantHtml,
@@ -1740,6 +1970,9 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
         directPage.finalUrl,
         attendee,
       );
+      officialParticipantStatus =
+        officialParticipantStatus ||
+        classifyParticipantStatus(directPage.html || "", directPage.finalUrl, attendee);
       if (!officialSubmission && !directSubmission.error) {
         const official = await submitOfficialParticipantSelection({
           html: directPage.html || "",
@@ -1780,7 +2013,9 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
       });
     }
 
-    const registrationConfirmed = Boolean(officialSubmissionResult?.success);
+    const registrationConfirmed = Boolean(
+      officialSubmissionResult?.success || officialParticipantStatus?.registeredLikely,
+    );
     const actionRequired =
       !registrationConfirmed &&
       !dryRun &&
@@ -1862,6 +2097,7 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
         : null,
       officialPreflight: safePreflight(officialPreflight),
       officialSubmissionResult,
+      officialParticipantStatus,
       registrationConfirmed,
       actionRequired,
       checkoutUrl: actionRequiredResult?.checkoutUrl || "",

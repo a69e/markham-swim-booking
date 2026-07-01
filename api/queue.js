@@ -232,7 +232,7 @@ export default async function handler(request, response) {
             ${endAt},
             ${status === "registered" ? new Date().toISOString() : null}
           )
-          on conflict (device_id, session_key)
+          on conflict (device_id, attendee_id, session_key)
           do update set
             account_id = ${attendee.account_id},
             attendee_id = ${attendee.attendee_id},

@@ -219,6 +219,32 @@ async function attemptRegistration(session) {
   return data;
 }
 
+async function registerFromRow(session, button) {
+  const previousText = button.textContent;
+  button.textContent = "Registering...";
+  button.disabled = true;
+
+  try {
+    await attemptRegistration(session);
+    button.textContent = "Registered";
+    button.className = "queued";
+    button.disabled = true;
+  } catch (error) {
+    if (error.message.includes("not confirmed")) {
+      button.textContent = "Queued";
+      button.className = "queued";
+      button.disabled = true;
+      return;
+    }
+
+    button.textContent = "Failed";
+    setTimeout(() => {
+      button.textContent = previousText;
+      button.disabled = false;
+    }, 2200);
+  }
+}
+
 async function runQueueWorker() {
   if (!accountSaved) return;
   try {
@@ -418,8 +444,6 @@ function renderSessions() {
     const row = template.content.firstElementChild.cloneNode(true);
     const serviceLink = row.querySelector("h2 a");
     serviceLink.textContent = session.service;
-    serviceLink.href = session.url || "#";
-    if (!session.url) serviceLink.removeAttribute("href");
 
     row.querySelector(".session-main p").textContent =
       session.timeRange || session.time || "";
@@ -441,32 +465,15 @@ function renderSessions() {
     button.className = isRegistered || isQueued ? "queued" : buttonClass;
     button.disabled = buttonClass === "full" || isRegistered || isQueued;
     if (!isRegistered && !isQueued && isRegisterAction(session.action) && session.url) {
-      button.addEventListener("click", async () => {
-        const previousText = button.textContent;
-        button.textContent = "Registering...";
-        button.disabled = true;
-
-        try {
-          await attemptRegistration(session);
-          button.textContent = "Registered";
-          button.className = "queued";
-          button.disabled = true;
-        } catch (error) {
-          if (error.message.includes("not confirmed")) {
-            button.textContent = "Queued";
-            button.className = "queued";
-            button.disabled = true;
-            return;
-          }
-
-          button.textContent = "Failed";
-          setTimeout(() => {
-            button.textContent = previousText;
-            button.disabled = false;
-          }, 2200);
-        }
+      serviceLink.href = "#";
+      serviceLink.addEventListener("click", (event) => {
+        event.preventDefault();
+        registerFromRow(session, button);
       });
+      button.addEventListener("click", () => registerFromRow(session, button));
     } else if (!isQueued && buttonClass !== "full") {
+      serviceLink.href = session.url || "#";
+      if (!session.url) serviceLink.removeAttribute("href");
       button.addEventListener("click", async () => {
         const previousText = button.textContent;
         button.textContent = "Saving...";
@@ -486,6 +493,9 @@ function renderSessions() {
           }, 1800);
         }
       });
+    } else {
+      serviceLink.href = session.url || "#";
+      if (!session.url) serviceLink.removeAttribute("href");
     }
 
     sessionList.append(row);

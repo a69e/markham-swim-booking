@@ -722,7 +722,9 @@ async function submitUrlEncodedForm(action, body, cookie, referer) {
 function analyzeRegistrationPage(html, finalUrl) {
   const text = safeText(html, 4000).toLowerCase();
   const title = pageTitle(html);
+  const login = isLoginPage(html, finalUrl);
   const success =
+    !login &&
     /(successfully|registered|registration complete|thank you|confirmed)/i.test(text) &&
     !/(checkout|cart|payment|balance due|amount due|add to waitlist)/i.test(text);
   const needsPayment = /(checkout|cart|payment|credit card|balance due|amount due|\$\d)/i.test(text);
@@ -732,6 +734,7 @@ function analyzeRegistrationPage(html, finalUrl) {
     title,
     finalUrl,
     success,
+    login,
     needsPayment,
     waitlist,
     buttons: extractButtons(html),
@@ -741,6 +744,8 @@ function analyzeRegistrationPage(html, finalUrl) {
 }
 
 async function attendeeForQueuedSession(db, queued, account) {
+  const attendeeId = Number(queued.attendee_id || account.default_attendee_id || 0);
+  const accountId = Number(account.id);
   const rows = await db`
     select
       id,
@@ -748,8 +753,8 @@ async function attendeeForQueuedSession(db, queued, account) {
       full_name,
       has_free_pass
     from account_attendees
-    where account_id = ${account.id}
-      and id = coalesce(${queued.attendee_id}, ${account.default_attendee_id})
+    where account_id = ${accountId}
+      and id = ${attendeeId}
     limit 1
   `;
   if (!rows.length) {
@@ -961,12 +966,13 @@ async function selectQueuedSession(db, deviceId, requestedKey) {
 
 export async function attemptQueuedRegistration(db, queued, options = {}) {
   const dryRun = options.dryRun !== false;
+  const queuedAccountId = Number(queued.account_id || 0);
   const accountRows = await db`
     select *
     from account_credentials
-    where id = ${queued.account_id}
+    where id = ${queuedAccountId}
        or device_id = ${queued.device_id}
-    order by case when id = ${queued.account_id} then 0 else 1 end
+    order by case when id = ${queuedAccountId} then 0 else 1 end
     limit 1
   `;
   if (!accountRows.length) {

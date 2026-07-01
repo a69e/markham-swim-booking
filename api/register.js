@@ -1,6 +1,8 @@
-import { decryptText } from "./crypto.js";
+import { randomBytes } from "node:crypto";
+import { decryptText, encryptText } from "./crypto.js";
 import { verifyPerfectMindLogin } from "./account.js";
 import { ensureQueueSchema, getSql } from "./db.js";
+import { sendCheckoutNotification } from "./notifications.js";
 
 const BASE_URL = "https://cityofmarkham.perfectmind.com";
 const DEFAULT_DRY_RUN = true;
@@ -18,6 +20,15 @@ const MONTHS = {
   nov: 10,
   dec: 11,
 };
+
+function appBaseUrl() {
+  const configured = process.env.APP_BASE_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || "https://markham-swim-booking.vercel.app";
+  return configured.startsWith("http") ? configured : `https://${configured}`;
+}
+
+function publicCheckoutUrl(token) {
+  return `${appBaseUrl().replace(/\/$/, "")}/api/checkout?token=${encodeURIComponent(token)}`;
+}
 
 function validateDeviceId(deviceId) {
   if (typeof deviceId !== "string" || deviceId.length < 8) {
@@ -1320,6 +1331,51 @@ function safePreflight(preflight) {
   };
 }
 
+function checkoutRequiredFromResult(result) {
+  if (!result) return false;
+  return (
+    result.needsPayment ||
+    /checkout|shoppingcartkey|membercheckout/i.test(result.finalUrl || "") ||
+    (result.extraSteps || []).some((step) =>
+      /checkout|shoppingcartkey|membercheckout/i.test(
+        `${step.action || ""} ${step.result?.finalUrl || ""} ${step.result?.title || ""}`,
+      ),
+    )
+  );
+}
+
+function checkoutUrlFromResult(result) {
+  if (!result) return "";
+  const candidates = [
+    result.finalUrl,
+    ...(result.extraSteps || []).map((step) => step.result?.finalUrl),
+  ].filter(Boolean);
+  return candidates.reverse().find((url) => /checkout|shoppingcartkey|membercheckout/i.test(url)) || "";
+}
+
+async function markActionRequired(db, queued, checkoutUrl) {
+  const token = randomBytes(24).toString("base64url");
+  const encrypted = encryptText(checkoutUrl);
+  await db`
+    update queued_sessions
+    set status = 'action_required',
+        action_required_at = now(),
+        checkout_token = ${token},
+        checkout_token_expires_at = now() + interval '25 minutes',
+        checkout_url_cipher = ${encrypted.cipher},
+        checkout_url_iv = ${encrypted.iv},
+        checkout_url_tag = ${encrypted.tag},
+        last_attempt_at = now(),
+        last_error = 'Checkout needs manual confirmation.',
+        updated_at = now()
+    where id = ${queued.id}
+  `;
+
+  const userCheckoutUrl = publicCheckoutUrl(token);
+  const notification = await sendCheckoutNotification(db, queued, userCheckoutUrl);
+  return { token, checkoutUrl: userCheckoutUrl, notification };
+}
+
 function sessionSummary(row) {
   const session = row.session || {};
   return {
@@ -1337,6 +1393,10 @@ function sessionSummary(row) {
     endAt: row.end_at,
     lastAttemptAt: row.last_attempt_at,
     lastError: row.last_error || "",
+    checkoutUrl:
+      row.status === "action_required" && row.checkout_token
+        ? `./api/checkout?token=${encodeURIComponent(row.checkout_token)}`
+        : "",
   };
 }
 
@@ -1666,6 +1726,14 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
     }
 
     const registrationConfirmed = Boolean(officialSubmissionResult?.success);
+    const actionRequired =
+      !registrationConfirmed &&
+      !dryRun &&
+      checkoutRequiredFromResult(officialSubmissionResult);
+    const officialCheckoutUrl = actionRequired
+      ? checkoutUrlFromResult(officialSubmissionResult)
+      : "";
+    let actionRequiredResult = null;
     if (registrationConfirmed && !dryRun) {
       await db`
         update queued_sessions
@@ -1676,6 +1744,8 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
             updated_at = now()
         where id = ${queued.id}
       `;
+    } else if (actionRequired && officialCheckoutUrl) {
+      actionRequiredResult = await markActionRequired(db, queued, officialCheckoutUrl);
     } else if (!dryRun && options.directAttempt) {
       await db`
         update queued_sessions
@@ -1688,12 +1758,16 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
     }
     const message = registrationConfirmed
       ? "Registration confirmed."
+      : actionRequired
+        ? "Spot is held. Please complete checkout."
       : dryRun
         ? "Dry-run probe finished. No official registration was submitted."
         : officialPreflight?.error ||
           officialSubmissionResult?.title ||
           "Official flow was submitted, but registration was not confirmed yet.";
-    await markAttempt(db, queued.id, message);
+    if (!actionRequired) {
+      await markAttempt(db, queued.id, message);
+    }
 
     return {
       ok: true,
@@ -1734,6 +1808,9 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
       officialPreflight: safePreflight(officialPreflight),
       officialSubmissionResult,
       registrationConfirmed,
+      actionRequired,
+      checkoutUrl: actionRequiredResult?.checkoutUrl || "",
+      notification: actionRequiredResult?.notification || null,
     };
 }
 

@@ -9,8 +9,10 @@ let hasMore = true;
 let isLoadingMore = false;
 let queuedKeys = new Set();
 let registeredKeys = new Set();
+let actionRequiredKeys = new Set();
 let sessionStatuses = new Map();
 let sessionAttempts = new Map();
+let sessionCheckoutUrls = new Map();
 let trackedSessions = [];
 let queueApiAvailable = true;
 
@@ -30,6 +32,7 @@ const accountDialog = document.querySelector("#accountDialog");
 const accountMenu = document.querySelector("#accountMenu");
 const accountDropdown = document.querySelector("#accountDropdown");
 const accountManage = document.querySelector("#accountManage");
+const notificationsToggle = document.querySelector("#notificationsToggle");
 const attendeeMenu = document.querySelector("#attendeeMenu");
 const accountLogout = document.querySelector("#accountLogout");
 const accountForm = document.querySelector("#accountForm");
@@ -39,6 +42,8 @@ const accountPassword = document.querySelector("#accountPassword");
 const accountStatus = document.querySelector("#accountStatus");
 let accountSaved = false;
 let attendees = [];
+let notificationsAvailable = false;
+let notificationsSubscribed = false;
 
 function uniqueValues(key) {
   return [...new Set(sessions.map((session) => session[key]).filter(Boolean))]
@@ -166,8 +171,10 @@ function deviceId() {
 async function loadQueuedSessions() {
   queuedKeys = new Set();
   registeredKeys = new Set();
+  actionRequiredKeys = new Set();
   sessionStatuses = new Map();
   sessionAttempts = new Map();
+  sessionCheckoutUrls = new Map();
   trackedSessions = [];
 
   try {
@@ -184,12 +191,22 @@ async function loadQueuedSessions() {
         lastAttemptAt: item.last_attempt_at || "",
         lastError: item.last_error || "",
       });
+      if (item.checkout_url) {
+        sessionCheckoutUrls.set(item.session_key, item.checkout_url);
+      }
       if (item.status === "registered") {
         registeredKeys.add(item.session_key);
       } else if (item.status === "queued") {
         queuedKeys.add(item.session_key);
+      } else if (item.status === "action_required") {
+        actionRequiredKeys.add(item.session_key);
       }
-      if (!sessionIsPast && (item.status === "queued" || item.status === "registered")) {
+      if (
+        !sessionIsPast &&
+        (item.status === "queued" ||
+          item.status === "registered" ||
+          item.status === "action_required")
+      ) {
         trackedSessions.push(item.session);
       }
     });
@@ -232,12 +249,20 @@ async function attemptRegistration(session) {
   if (!response.ok) {
     throw new Error(data.error || "Automatic registration failed.");
   }
+  if (data.actionRequired && data.checkoutUrl) {
+    queuedKeys.delete(queued.key);
+    actionRequiredKeys.add(queued.key);
+    sessionStatuses.set(queued.key, "action_required");
+    sessionCheckoutUrls.set(queued.key, data.checkoutUrl);
+    return data;
+  }
   if (!data.registrationConfirmed) {
     throw new Error(data.message || "Registration was not confirmed.");
   }
 
   registeredKeys.add(queued.key);
   queuedKeys.delete(queued.key);
+  actionRequiredKeys.delete(queued.key);
   sessionStatuses.set(queued.key, "registered");
   return data;
 }
@@ -249,10 +274,21 @@ async function registerFromRow(session, button) {
   button.disabled = true;
 
   try {
-    await attemptRegistration(session);
-    button.textContent = "Registered";
-    button.className = "registered";
-    button.disabled = true;
+    const data = await attemptRegistration(session);
+    const key = queuedSessionKey(session);
+    if (data.actionRequired && data.checkoutUrl) {
+      actionRequiredKeys.add(key);
+      queuedKeys.delete(key);
+      registeredKeys.delete(key);
+      sessionStatuses.set(key, "action_required");
+      sessionCheckoutUrls.set(key, data.checkoutUrl);
+      await loadQueuedSessions();
+      renderSessions();
+    } else {
+      button.textContent = "Registered";
+      button.className = "registered";
+      button.disabled = true;
+    }
   } catch (error) {
     const key = queuedSessionKey(session);
     queuedKeys.delete(key);
@@ -288,6 +324,91 @@ function updateAccountButton(hasAccount, email = "", fullName = "") {
   accountButton.title = email || "Save account";
   accountButton.classList.toggle("saved", hasAccount);
   accountMenu.classList.toggle("saved", hasAccount);
+}
+
+function setNotificationButton(message) {
+  if (!notificationsToggle) return;
+  notificationsToggle.textContent = message;
+  notificationsToggle.hidden = !accountSaved;
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
+}
+
+async function loadNotificationStatus() {
+  if (!accountSaved || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    notificationsAvailable = false;
+    notificationsSubscribed = false;
+    setNotificationButton("Enable notifications");
+    return;
+  }
+
+  try {
+    const params = new URLSearchParams({ deviceId: deviceId() });
+    const response = await fetch(`./api/push?${params}`, { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    notificationsAvailable = Boolean(data.configured && data.publicKey);
+    notificationsSubscribed = Boolean(data.subscribed);
+    if (!notificationsAvailable) {
+      setNotificationButton("Notifications unavailable");
+    } else {
+      setNotificationButton(
+        notificationsSubscribed ? "Notifications enabled" : "Enable notifications",
+      );
+    }
+  } catch {
+    notificationsAvailable = false;
+    notificationsSubscribed = false;
+    setNotificationButton("Notifications unavailable");
+  }
+}
+
+async function enableNotifications() {
+  if (!accountSaved) return;
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    setNotificationButton("Notifications unsupported");
+    return;
+  }
+
+  setNotificationButton("Enabling...");
+  const params = new URLSearchParams({ deviceId: deviceId() });
+  const statusResponse = await fetch(`./api/push?${params}`, { cache: "no-store" });
+  const status = await statusResponse.json().catch(() => ({}));
+  if (!statusResponse.ok || !status.configured || !status.publicKey) {
+    setNotificationButton("Notifications unavailable");
+    return;
+  }
+
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    setNotificationButton("Notifications blocked");
+    return;
+  }
+
+  const registration = await navigator.serviceWorker.register("./sw.js");
+  const subscription =
+    (await registration.pushManager.getSubscription()) ||
+    (await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(status.publicKey),
+    }));
+
+  const response = await fetch("./api/push", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceId: deviceId(), subscription }),
+  });
+  if (!response.ok) {
+    setNotificationButton("Notifications failed");
+    return;
+  }
+
+  notificationsSubscribed = true;
+  setNotificationButton("Notifications enabled");
 }
 
 function attendeeSubtitle(attendee) {
@@ -376,11 +497,13 @@ async function loadAccountStatus() {
       data.hasAccount ? "success" : "",
     );
     loadAttendees();
+    loadNotificationStatus();
   } catch {
     updateAccountButton(false);
     attendees = [];
     renderAttendeeMenu();
     setAccountMessage("Account database is not connected.", "error");
+    setNotificationButton("Enable notifications");
   }
 }
 
@@ -404,6 +527,7 @@ async function saveAccount(event) {
     accountPassword.value = "";
     updateAccountButton(true, data.email, data.displayName || data.fullName);
     loadAttendees();
+    loadNotificationStatus();
     setAccountMessage("Login verified and saved.", "success");
     setTimeout(() => accountDialog.close(), 700);
   } catch (error) {
@@ -430,6 +554,7 @@ async function logoutAccount() {
   updateAccountButton(false);
   attendees = [];
   renderAttendeeMenu();
+  setNotificationButton("Enable notifications");
 }
 
 function renderSessions() {
@@ -476,21 +601,35 @@ function renderSessions() {
     const queueKey = queuedSessionKey(session);
     const isRegistered = registeredKeys.has(queueKey);
     const isQueued = queuedKeys.has(queueKey);
+    const isActionRequired = actionRequiredKeys.has(queueKey);
+    const checkoutUrl = sessionCheckoutUrls.get(queueKey);
     row.dataset.key = queueKey;
     row.dataset.registerable =
-      !isRegistered && !isQueued && isRegisterAction(session.action) && session.url
+      !isRegistered && !isQueued && !isActionRequired && isRegisterAction(session.action) && session.url
         ? "true"
         : "false";
     button.textContent = isRegistered
       ? "Registered"
-      : isQueued
-        ? "Queued"
-        : isRegisterAction(session.action)
-          ? "Register"
-        : "Queue";
-    button.className = isRegistered ? "registered" : isQueued ? "queued" : buttonClass;
-    button.disabled = buttonClass === "full" || isRegistered || isQueued;
-    if (!isRegistered && !isQueued && isRegisterAction(session.action) && session.url) {
+      : isActionRequired
+        ? "Checkout"
+        : isQueued
+          ? "Queued"
+          : isRegisterAction(session.action)
+            ? "Register"
+            : "Queue";
+    button.className = isRegistered
+      ? "registered"
+      : isActionRequired
+        ? "action-required"
+        : isQueued
+          ? "queued"
+          : buttonClass;
+    button.disabled = (!isActionRequired && buttonClass === "full") || isRegistered || isQueued;
+    if (isActionRequired && checkoutUrl) {
+      button.addEventListener("click", () => {
+        window.location.href = checkoutUrl;
+      });
+    } else if (!isRegistered && !isQueued && isRegisterAction(session.action) && session.url) {
       serviceLink.href = "#";
       serviceLink.addEventListener("click", (event) => {
         event.preventDefault();
@@ -525,7 +664,7 @@ function renderSessions() {
     }
 
     const attempt = attemptText(queueKey);
-    if (attempt && (isQueued || isRegistered)) {
+    if (attempt && (isQueued || isRegistered || isActionRequired)) {
       const meta = document.createElement("small");
       meta.className = "attempt-meta";
       meta.textContent = attempt;
@@ -648,6 +787,10 @@ accountManage.addEventListener("click", () => {
 
 accountLogout.addEventListener("click", () => {
   logoutAccount();
+});
+
+notificationsToggle.addEventListener("click", () => {
+  enableNotifications();
 });
 
 accountClose.addEventListener("click", () => {

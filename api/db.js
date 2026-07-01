@@ -102,4 +102,31 @@ export async function ensureQueueSchema() {
     alter table queued_sessions
     add column if not exists auto_register boolean not null default true
   `;
+
+  await db`
+    alter table queued_sessions
+    add column if not exists action_required_at timestamptz,
+    add column if not exists checkout_token text,
+    add column if not exists checkout_token_expires_at timestamptz,
+    add column if not exists checkout_url_cipher text,
+    add column if not exists checkout_url_iv text,
+    add column if not exists checkout_url_tag text,
+    add column if not exists notified_at timestamptz,
+    add column if not exists notification_error text
+  `;
+
+  await db`
+    create table if not exists push_subscriptions (
+      id bigserial primary key,
+      device_id text not null,
+      account_id bigint references account_credentials(id) on delete cascade,
+      endpoint text not null unique,
+      subscription jsonb not null,
+      user_agent text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      last_success_at timestamptz,
+      last_error text
+    )
+  `;
 }

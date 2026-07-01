@@ -26,7 +26,7 @@ function parseSessionTimes(session) {
 
 function validateStatus(status) {
   const normalized = typeof status === "string" ? status.toLowerCase() : "queued";
-  if (["queued", "registered", "failed", "expired"].includes(normalized)) {
+  if (["queued", "registered", "failed", "expired", "action_required"].includes(normalized)) {
     return normalized;
   }
   return "queued";
@@ -101,6 +101,11 @@ export default async function handler(request, response) {
           queued_sessions.registered_at,
           queued_sessions.last_attempt_at,
           queued_sessions.last_error,
+          queued_sessions.action_required_at,
+          queued_sessions.checkout_token,
+          queued_sessions.checkout_token_expires_at,
+          queued_sessions.notified_at,
+          queued_sessions.notification_error,
           queued_sessions.created_at,
           queued_sessions.attendee_id,
           account_attendees.full_name as attendee_name,
@@ -113,7 +118,18 @@ export default async function handler(request, response) {
       `;
 
       response.setHeader("Cache-Control", "no-store");
-      response.status(200).json({ queued: rows });
+      response.status(200).json({
+        queued: rows.map((row) => ({
+          ...row,
+          checkout_url:
+            row.status === "action_required" &&
+            row.checkout_token &&
+            (!row.checkout_token_expires_at ||
+              new Date(row.checkout_token_expires_at) > new Date())
+              ? `./api/checkout?token=${encodeURIComponent(row.checkout_token)}`
+              : "",
+        })),
+      });
       return;
     }
 

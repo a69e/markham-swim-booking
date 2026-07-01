@@ -453,6 +453,11 @@ summary {
   color: #ffffff;
 }
 
+.session-action button.action-required {
+  background: #2b7ab1;
+  color: #ffffff;
+}
+
 .attempt-meta {
   display: block;
   margin-top: 4px;

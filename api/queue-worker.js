@@ -57,6 +57,8 @@ export default async function handler(request, response) {
           key: row.session_key,
           ok: true,
           registered: result.registrationConfirmed,
+          actionRequired: result.actionRequired,
+          checkoutUrl: result.checkoutUrl || "",
           message: result.message,
           attendee: result.attendee?.fullName || "",
         });

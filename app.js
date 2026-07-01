@@ -196,6 +196,40 @@ async function saveQueuedSession(session) {
   queuedKeys.add(key);
   sessionStatuses.set(key, "queued");
   queueApiAvailable = true;
+  return { key, status: data.status };
+}
+
+async function attemptRegistration(session) {
+  const queued = await saveQueuedSession(session);
+  const params = new URLSearchParams({
+    deviceId: deviceId(),
+    key: queued.key,
+    dryRun: "false",
+  });
+  const response = await fetch(`./api/register?${params}`, { cache: "no-store" });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "Automatic registration failed.");
+  }
+  if (!data.registrationConfirmed) {
+    throw new Error(data.message || "Registration was not confirmed.");
+  }
+
+  registeredKeys.add(queued.key);
+  queuedKeys.delete(queued.key);
+  sessionStatuses.set(queued.key, "registered");
+  return data;
+}
+
+async function runQueueWorker() {
+  if (!accountSaved) return;
+  try {
+    await fetch("./api/queue-worker", { method: "POST", cache: "no-store" });
+    await loadQueuedSessions();
+    renderSessions();
+  } catch {
+    // The next interval or page load can try again.
+  }
 }
 
 function setAccountMessage(message, tone = "") {
@@ -406,11 +440,33 @@ function renderSessions() {
       : isQueued
         ? "Queued"
         : "Queue";
-    button.className = isQueued ? "queued" : buttonClass;
+    button.className = isRegistered || isQueued ? "queued" : buttonClass;
     button.disabled = buttonClass === "full" || isRegistered || isQueued;
     if (!isRegistered && !isQueued && isRegisterAction(session.action) && session.url) {
-      button.addEventListener("click", () => {
-        window.location.href = session.url;
+      button.addEventListener("click", async () => {
+        const previousText = button.textContent;
+        button.textContent = "Registering...";
+        button.disabled = true;
+
+        try {
+          await attemptRegistration(session);
+          button.textContent = "Registered";
+          button.className = "queued";
+          button.disabled = true;
+        } catch (error) {
+          if (error.message.includes("not confirmed")) {
+            button.textContent = "Queued";
+            button.className = "queued";
+            button.disabled = true;
+            return;
+          }
+
+          button.textContent = "Failed";
+          setTimeout(() => {
+            button.textContent = previousText;
+            button.disabled = false;
+          }, 2200);
+        }
       });
     } else if (!isQueued && buttonClass !== "full") {
       button.addEventListener("click", async () => {
@@ -504,8 +560,14 @@ function resetVisibleList() {
 
 locationOptions.addEventListener("change", resetVisibleList);
 serviceOptions.addEventListener("change", resetVisibleList);
-queuedOnlyToggle.addEventListener("change", resetVisibleList);
-registeredOnlyToggle.addEventListener("change", resetVisibleList);
+queuedOnlyToggle.addEventListener("change", () => {
+  if (queuedOnlyToggle.checked) registeredOnlyToggle.checked = false;
+  resetVisibleList();
+});
+registeredOnlyToggle.addEventListener("change", () => {
+  if (registeredOnlyToggle.checked) queuedOnlyToggle.checked = false;
+  resetVisibleList();
+});
 
 function openAccountDialog() {
   accountDropdown.hidden = true;
@@ -592,6 +654,7 @@ function loadMoreIfNeeded() {
 
 window.addEventListener("scroll", loadMoreIfNeeded, { passive: true });
 window.addEventListener("resize", loadMoreIfNeeded);
+setInterval(runQueueWorker, 60000);
 
 loadAccountStatus();
 loadSessions();

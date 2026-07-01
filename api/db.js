@@ -92,4 +92,14 @@ export async function ensureQueueSchema() {
     alter table account_credentials
     add column if not exists default_attendee_id bigint references account_attendees(id) on delete set null
   `;
+
+  await db`
+    alter table queued_sessions
+    add column if not exists attendee_id bigint references account_attendees(id) on delete set null
+  `;
+
+  await db`
+    alter table queued_sessions
+    add column if not exists auto_register boolean not null default true
+  `;
 }

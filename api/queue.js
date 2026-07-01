@@ -54,6 +54,33 @@ function validateDeviceId(deviceId) {
   }
 }
 
+async function defaultAttendeeForDevice(db, deviceId) {
+  const rows = await db`
+    select
+      account_credentials.id as account_id,
+      account_attendees.id as attendee_id,
+      account_attendees.full_name,
+      account_attendees.has_free_pass
+    from account_credentials
+    left join account_attendees
+      on account_attendees.id = account_credentials.default_attendee_id
+    where account_credentials.device_id = ${deviceId}
+    limit 1
+  `;
+
+  if (!rows.length) {
+    throw new Error("Please login before using Queue or automatic Register.");
+  }
+  if (!rows[0].attendee_id) {
+    throw new Error("Please open Probe queue once after login so attendees can be loaded.");
+  }
+  if (!rows[0].has_free_pass) {
+    throw new Error(`${rows[0].full_name} does not have a free pass. Automatic registration is disabled for paid registrations.`);
+  }
+
+  return rows[0];
+}
+
 export default async function handler(request, response) {
   try {
     await ensureQueueSchema();
@@ -65,8 +92,20 @@ export default async function handler(request, response) {
       validateDeviceId(deviceId);
 
       const rows = await db`
-        select session_key, session, status, start_at, end_at, registered_at, created_at
+        select
+          queued_sessions.session_key,
+          queued_sessions.session,
+          queued_sessions.status,
+          queued_sessions.start_at,
+          queued_sessions.end_at,
+          queued_sessions.registered_at,
+          queued_sessions.created_at,
+          queued_sessions.attendee_id,
+          account_attendees.full_name as attendee_name,
+          account_attendees.has_free_pass
         from queued_sessions
+        left join account_attendees
+          on account_attendees.id = queued_sessions.attendee_id
         where device_id = ${deviceId}
         order by created_at desc
       `;
@@ -86,11 +125,13 @@ export default async function handler(request, response) {
       }
       const status = validateStatus(body.status);
       const { startAt, endAt } = parseSessionTimes(body.session);
+      const attendee = await defaultAttendeeForDevice(db, body.deviceId);
 
       await db`
         insert into queued_sessions (
           device_id,
           account_id,
+          attendee_id,
           session_key,
           session,
           status,
@@ -100,7 +141,8 @@ export default async function handler(request, response) {
         )
         values (
           ${body.deviceId},
-          (select id from account_credentials where device_id = ${body.deviceId}),
+          ${attendee.account_id},
+          ${attendee.attendee_id},
           ${key},
           ${JSON.stringify(body.session)},
           ${status},
@@ -110,16 +152,23 @@ export default async function handler(request, response) {
         )
         on conflict (device_id, session_key)
         do update set
-          account_id = (select id from account_credentials where device_id = ${body.deviceId}),
+          account_id = ${attendee.account_id},
+          attendee_id = ${attendee.attendee_id},
           session = excluded.session,
           status = excluded.status,
           start_at = excluded.start_at,
           end_at = excluded.end_at,
           registered_at = coalesce(queued_sessions.registered_at, excluded.registered_at),
+          auto_register = true,
           updated_at = now()
       `;
 
-      response.status(200).json({ ok: true, key, status });
+      response.status(200).json({
+        ok: true,
+        key,
+        status,
+        attendeeName: attendee.full_name,
+      });
       return;
     }
 

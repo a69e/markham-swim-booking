@@ -616,6 +616,151 @@ function buildParticipantSelectionPreview(html, baseUrl, selectedIndex) {
   };
 }
 
+function buildParticipantSelectionSubmission(html, baseUrl, attendee) {
+  const formHtml = extractFormHtml(html, "eventParticipantsSelection");
+  if (!formHtml) return { error: "Attendee selection form was not found." };
+
+  const details = extractFormDetails(html, baseUrl).find(
+    (form) => form.id === "eventParticipantsSelection",
+  );
+  const participantIndexes = details?.participantIndexes || [];
+  const selectedRecord = extractAttendeeRecords(html).find(
+    (record) =>
+      record.memberId === attendee.member_id ||
+      record.fullName.toLowerCase() === String(attendee.full_name || "").toLowerCase(),
+  );
+  const selected = selectedRecord?.index || "";
+  if (!selected || !participantIndexes.includes(selected)) {
+    return {
+      error: `${attendee.full_name || "Selected attendee"} was not found on the official attendee page.`,
+      participantIndexes,
+    };
+  }
+
+  const body = new URLSearchParams();
+  let selectedCheckbox = "";
+  for (const match of formHtml.matchAll(/<input\b([^>]*)>/gi)) {
+    const attrs = extractAttributes(match[1]);
+    if (!attrs.name || /\bdisabled\b/i.test(match[0])) continue;
+
+    const type = (attrs.type || "text").toLowerCase();
+    const participantMatch = attrs.name.match(
+      /^ParticipantsFamily\.FamilyMembers\[(\d+)\]\.IsParticipating$/,
+    );
+
+    if (type === "checkbox") {
+      if (participantMatch?.[1] === selected) {
+        body.append(attrs.name, attrs.value || "true");
+        selectedCheckbox = attrs.name;
+      }
+      continue;
+    }
+
+    body.append(attrs.name, attrs.value || "");
+  }
+
+  if (!selectedCheckbox) {
+    return { error: "Could not select attendee checkbox.", participantIndexes };
+  }
+
+  const action = formAction(formHtml, baseUrl);
+  return {
+    action: action.action,
+    method: action.method,
+    body,
+    selectedParticipantIndex: selected,
+    selectedParticipantLabel: selectedRecord.fullName,
+    selectedCheckbox,
+    fieldCount: [...body.keys()].length,
+  };
+}
+
+async function submitUrlEncodedForm(action, body, cookie, referer) {
+  let currentUrl = action;
+  let currentCookie = cookie || "";
+  const redirects = [];
+  let response = await fetch(currentUrl, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      Accept: "text/html,application/xhtml+xml",
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      Cookie: currentCookie,
+      Origin: BASE_URL,
+      Referer: referer,
+      "User-Agent": "Mozilla/5.0",
+    },
+    body,
+  });
+  currentCookie = mergeCookieHeader(currentCookie, response);
+
+  let html = "";
+  for (let index = 0; index < 8; index += 1) {
+    const location = response.headers.get("location") || "";
+    if (response.status < 300 || response.status >= 400 || !location) {
+      const contentType = response.headers.get("content-type") || "";
+      html = contentType.includes("text/html") ? await response.text() : "";
+      break;
+    }
+
+    currentUrl = absoluteUrl(location, currentUrl);
+    redirects.push(currentUrl);
+    response = await fetch(currentUrl, {
+      redirect: "manual",
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        Cookie: currentCookie,
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+    currentCookie = mergeCookieHeader(currentCookie, response);
+  }
+
+  return { response, finalUrl: currentUrl, redirects, html, cookie: currentCookie };
+}
+
+function analyzeRegistrationPage(html, finalUrl) {
+  const text = safeText(html, 4000).toLowerCase();
+  const title = pageTitle(html);
+  const success =
+    /(successfully|registered|registration complete|thank you|confirmed)/i.test(text) &&
+    !/(checkout|cart|payment|balance due|amount due|add to waitlist)/i.test(text);
+  const needsPayment = /(checkout|cart|payment|credit card|balance due|amount due|\$\d)/i.test(text);
+  const waitlist = /(waitlist|waiting list|add to waitlist)/i.test(text);
+
+  return {
+    title,
+    finalUrl,
+    success,
+    needsPayment,
+    waitlist,
+    buttons: extractButtons(html),
+    forms: extractForms(html, finalUrl),
+    links: extractLinks(html, finalUrl),
+  };
+}
+
+async function attendeeForQueuedSession(db, queued, account) {
+  const rows = await db`
+    select
+      id,
+      member_id,
+      full_name,
+      has_free_pass
+    from account_attendees
+    where account_id = ${account.id}
+      and id = coalesce(${queued.attendee_id}, ${account.default_attendee_id})
+    limit 1
+  `;
+  if (!rows.length) {
+    throw new Error("No selected attendee is saved for this queued session.");
+  }
+  if (!rows[0].has_free_pass) {
+    throw new Error(`${rows[0].full_name} does not have a free pass. Automatic registration stopped before payment.`);
+  }
+  return rows[0];
+}
+
 function extractRegisterHints(html, baseUrl) {
   return {
     title: pageTitle(html),
@@ -814,45 +959,22 @@ async function selectQueuedSession(db, deviceId, requestedKey) {
   return { queued: null, expired };
 }
 
-export default async function handler(request, response) {
-  if (!["GET", "POST"].includes(request.method)) {
-    response.setHeader("Allow", "GET, POST");
-    response.status(405).json({ error: "Method not allowed" });
-    return;
+export async function attemptQueuedRegistration(db, queued, options = {}) {
+  const dryRun = options.dryRun !== false;
+  const accountRows = await db`
+    select *
+    from account_credentials
+    where id = ${queued.account_id}
+       or device_id = ${queued.device_id}
+    order by case when id = ${queued.account_id} then 0 else 1 end
+    limit 1
+  `;
+  if (!accountRows.length) {
+    throw new Error("No saved login for this device.");
   }
 
-  try {
-    await ensureQueueSchema();
-    const db = getSql();
-    const deviceId =
-      typeof request.query.deviceId === "string" ? request.query.deviceId : "";
-    validateDeviceId(deviceId);
-
-    const dryRun =
-      request.query.dryRun === undefined
-        ? DEFAULT_DRY_RUN
-        : request.query.dryRun !== "false";
-    const selection = await selectQueuedSession(db, deviceId, request.query.key);
-    const queued = selection.queued;
-    if (!queued) {
-      response.status(404).json({
-        error: "No active queued session found for this device.",
-        expired: selection.expired,
-      });
-      return;
-    }
-
-    const accounts = await db`
-      select *
-      from account_credentials
-      where device_id = ${deviceId}
-      limit 1
-    `;
-    if (!accounts.length) {
-      throw new Error("No saved login for this device.");
-    }
-
-    const account = accounts[0];
+  const account = accountRows[0];
+  const attendee = await attendeeForQueuedSession(db, queued, account);
     const password = decryptText({
       cipher: account.password_cipher,
       iv: account.password_iv,
@@ -880,10 +1002,8 @@ export default async function handler(request, response) {
       socialSiteRegisterUrl(registerUrl),
     ]);
     const participantProbes = [];
-    const participantIndex =
-      typeof request.query.participantIndex === "string"
-        ? request.query.participantIndex
-        : "";
+    let officialSubmission = null;
+    let officialSubmissionResult = null;
 
     for (const url of registerCandidates) {
       const directPage = await fetchHtmlWithRedirects(
@@ -918,9 +1038,34 @@ export default async function handler(request, response) {
         const selectionPreview = buildParticipantSelectionPreview(
           participantHtml,
           formLogin?.finalUrl || reloggedPage.finalUrl,
-          participantIndex,
+          options.participantIndex,
         );
         const attendeeRecords = await saveAttendees(db, account.id, participantHtml);
+        const submission = buildParticipantSelectionSubmission(
+          participantHtml,
+          formLogin?.finalUrl || reloggedPage.finalUrl,
+          attendee,
+        );
+        if (!officialSubmission && !submission.error) {
+          officialSubmission = submission;
+          if (!dryRun) {
+            const submitted = await submitUrlEncodedForm(
+              submission.action,
+              submission.body,
+              formLogin?.cookie || reloggedPage.cookie || participantLogin.cookie,
+              formLogin?.finalUrl || reloggedPage.finalUrl,
+            );
+            officialSubmissionResult = analyzeRegistrationPage(
+              submitted.html || "",
+              submitted.finalUrl,
+            );
+            officialSubmissionResult.status = submitted.response?.status || 0;
+            officialSubmissionResult.redirects = submitted.redirects;
+            officialSubmissionResult.looksLoggedIn = submitted.html
+              ? !isLoginPage(submitted.html, submitted.finalUrl)
+              : false;
+          }
+        }
         participantProbes.push({
           url,
           loginFinalUrl: participantLogin.finalUrl || "",
@@ -933,6 +1078,15 @@ export default async function handler(request, response) {
           hints: formHints || directHints,
           attendeesSaved: attendeeRecords.length,
           selectionPreview,
+          submissionPreview: submission.error
+            ? submission
+            : {
+                action: submission.action,
+                method: submission.method,
+                selectedParticipantIndex: submission.selectedParticipantIndex,
+                selectedParticipantLabel: submission.selectedParticipantLabel,
+                fieldCount: submission.fieldCount,
+              },
           formLogin: formLogin
             ? {
                 status: formLogin.response?.status || 0,
@@ -946,6 +1100,31 @@ export default async function handler(request, response) {
       }
 
       const directAttendees = await saveAttendees(db, account.id, directPage.html || "");
+      const directSubmission = buildParticipantSelectionSubmission(
+        directPage.html || "",
+        directPage.finalUrl,
+        attendee,
+      );
+      if (!officialSubmission && !directSubmission.error) {
+        officialSubmission = directSubmission;
+        if (!dryRun) {
+          const submitted = await submitUrlEncodedForm(
+            directSubmission.action,
+            directSubmission.body,
+            directPage.cookie || classPage.cookie || login.cookie,
+            directPage.finalUrl,
+          );
+          officialSubmissionResult = analyzeRegistrationPage(
+            submitted.html || "",
+            submitted.finalUrl,
+          );
+          officialSubmissionResult.status = submitted.response?.status || 0;
+          officialSubmissionResult.redirects = submitted.redirects;
+          officialSubmissionResult.looksLoggedIn = submitted.html
+            ? !isLoginPage(submitted.html, submitted.finalUrl)
+            : false;
+        }
+      }
       participantProbes.push({
         url,
         loginFinalUrl: "",
@@ -959,26 +1138,52 @@ export default async function handler(request, response) {
         selectionPreview: buildParticipantSelectionPreview(
           directPage.html || "",
           directPage.finalUrl,
-          participantIndex,
+          options.participantIndex,
         ),
+        submissionPreview: directSubmission.error
+          ? directSubmission
+          : {
+              action: directSubmission.action,
+              method: directSubmission.method,
+              selectedParticipantIndex: directSubmission.selectedParticipantIndex,
+              selectedParticipantLabel: directSubmission.selectedParticipantLabel,
+              fieldCount: directSubmission.fieldCount,
+            },
         formLogin: null,
       });
     }
 
-    const supportedLiveRegistration = false;
-    const message = supportedLiveRegistration
-      ? "Registration flow is ready."
-      : "Dry-run probe finished. Live registration is not enabled until the exact official flow is confirmed.";
+    const registrationConfirmed = Boolean(officialSubmissionResult?.success);
+    if (registrationConfirmed && !dryRun) {
+      await db`
+        update queued_sessions
+        set status = 'registered',
+            registered_at = now(),
+            last_attempt_at = now(),
+            last_error = '',
+            updated_at = now()
+        where id = ${queued.id}
+      `;
+    }
+    const message = registrationConfirmed
+      ? "Registration confirmed."
+      : dryRun
+        ? "Dry-run probe finished. No official registration was submitted."
+        : "Official flow was submitted, but registration was not confirmed yet.";
     await markAttempt(db, queued.id, message);
 
-    response.setHeader("Cache-Control", "no-store");
-    response.status(200).json({
+    return {
       ok: true,
       dryRun,
-      liveRegistrationEnabled: supportedLiveRegistration && !dryRun,
+      liveRegistrationEnabled: !dryRun,
       message,
-      expiredSkipped: selection.expired,
+      expiredSkipped: options.expired || [],
       queued: sessionSummary(queued),
+      attendee: {
+        id: attendee.id,
+        fullName: attendee.full_name,
+        hasFreePass: attendee.has_free_pass,
+      },
       login: {
         ok: true,
         finalUrl: login.finalUrl || "",
@@ -995,7 +1200,58 @@ export default async function handler(request, response) {
       registerUrl,
       registerCandidates,
       participantProbes,
+      officialSubmission: officialSubmission
+        ? {
+            action: officialSubmission.action,
+            selectedParticipantIndex: officialSubmission.selectedParticipantIndex,
+            selectedParticipantLabel: officialSubmission.selectedParticipantLabel,
+            fieldCount: officialSubmission.fieldCount,
+          }
+        : null,
+      officialSubmissionResult,
+      registrationConfirmed,
+    };
+}
+
+export default async function handler(request, response) {
+  if (!["GET", "POST"].includes(request.method)) {
+    response.setHeader("Allow", "GET, POST");
+    response.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  try {
+    await ensureQueueSchema();
+    const db = getSql();
+    const deviceId =
+      typeof request.query.deviceId === "string" ? request.query.deviceId : "";
+    validateDeviceId(deviceId);
+
+    const dryRun =
+      request.query.dryRun === undefined
+        ? DEFAULT_DRY_RUN
+        : request.query.dryRun !== "false";
+    const selection = await selectQueuedSession(db, deviceId, request.query.key);
+    const queued = selection.queued;
+    if (!queued) {
+      response.status(404).json({
+        error: "No active queued session found for this device.",
+        expired: selection.expired,
+      });
+      return;
+    }
+
+    const payload = await attemptQueuedRegistration(db, queued, {
+      dryRun,
+      participantIndex:
+        typeof request.query.participantIndex === "string"
+          ? request.query.participantIndex
+          : "",
+      expired: selection.expired,
     });
+
+    response.setHeader("Cache-Control", "no-store");
+    response.status(200).json(payload);
   } catch (error) {
     response.status(400).json({ error: error.message });
   }

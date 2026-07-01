@@ -10,8 +10,14 @@ const BOOKING_URL =
 const LOGIN_PATH = "/Clients/MemberRegistration/MemberSignIn";
 const CONTACT_URL = `${BASE_URL}/Clients/Contact`;
 
+function loginPathForReturnUrl(returnUrl) {
+  return String(returnUrl || "").includes("/SocialSite/")
+    ? "/SocialSite/MemberRegistration/MemberSignIn"
+    : LOGIN_PATH;
+}
+
 function loginUrl(returnUrl = BOOKING_URL) {
-  return `${BASE_URL}${LOGIN_PATH}?returnUrl=${encodeURIComponent(returnUrl)}`;
+  return `${BASE_URL}${loginPathForReturnUrl(returnUrl)}?returnUrl=${encodeURIComponent(returnUrl)}`;
 }
 
 function readJsonBody(request) {
@@ -86,14 +92,26 @@ function mergeCookieHeader(existingCookie, response) {
       : response.headers.get("set-cookie") || "";
   const cookiePairs = new Map();
 
-  [existingCookie, rawCookie]
-    .filter(Boolean)
-    .flatMap((value) => value.split(/,(?=\s*[^;,]+=[^;,]+)/g))
-    .map((cookie) => cookie.trim().split(";")[0])
+  String(existingCookie || "")
+    .split(";")
+    .map((pair) => pair.trim())
     .filter(Boolean)
     .forEach((pair) => {
       const name = pair.split("=")[0];
       cookiePairs.set(name, pair);
+    });
+
+  String(rawCookie || "")
+    .split(/,(?=\s*[^;,]+=[^;,]+)/g)
+    .map((cookie) => cookie.trim().split(";")[0])
+    .filter(Boolean)
+    .forEach((pair) => {
+      const name = pair.split("=")[0];
+      if (pair.endsWith("=")) {
+        cookiePairs.delete(name);
+      } else {
+        cookiePairs.set(name, pair);
+      }
     });
 
   return [...cookiePairs.values()].join("; ");
@@ -218,6 +236,7 @@ export async function fetchFullName(cookie) {
 
 export async function verifyPerfectMindLogin(email, password, returnUrl = BOOKING_URL) {
   const url = loginUrl(returnUrl);
+  const loginPath = loginPathForReturnUrl(returnUrl);
   const loginResponse = await fetch(url, {
     headers: {
       Accept: "text/html",
@@ -239,7 +258,7 @@ export async function verifyPerfectMindLogin(email, password, returnUrl = BOOKIN
     bsubmit: "Login",
   });
 
-  const verifyResponse = await fetch(`${BASE_URL}/SocialSite/MemberRegistration/MemberSignIn`, {
+  const verifyResponse = await fetch(`${BASE_URL}${loginPath}`, {
     method: "POST",
     redirect: "manual",
     headers: {

@@ -151,7 +151,7 @@ function attemptText(key) {
         hour: "numeric",
         minute: "2-digit",
       });
-  return `Last try: ${time}`;
+  return time;
 }
 
 function deviceId() {

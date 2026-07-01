@@ -61,14 +61,26 @@ function mergeCookieHeader(existingCookie, response) {
       : response.headers.get("set-cookie") || "";
   const cookiePairs = new Map();
 
-  [existingCookie, rawCookie]
-    .filter(Boolean)
-    .flatMap((value) => value.split(/,(?=\s*[^;,]+=[^;,]+)/g))
-    .map((cookie) => cookie.trim().split(";")[0])
+  String(existingCookie || "")
+    .split(";")
+    .map((pair) => pair.trim())
     .filter(Boolean)
     .forEach((pair) => {
       const name = pair.split("=")[0];
       cookiePairs.set(name, pair);
+    });
+
+  String(rawCookie || "")
+    .split(/,(?=\s*[^;,]+=[^;,]+)/g)
+    .map((cookie) => cookie.trim().split(";")[0])
+    .filter(Boolean)
+    .forEach((pair) => {
+      const name = pair.split("=")[0];
+      if (pair.endsWith("=")) {
+        cookiePairs.delete(name);
+      } else {
+        cookiePairs.set(name, pair);
+      }
     });
 
   return [...cookiePairs.values()].join("; ");
@@ -676,6 +688,192 @@ function buildParticipantSelectionSubmission(html, baseUrl, attendee) {
   };
 }
 
+function buildFormSubmission(html, baseUrl, formId) {
+  const formHtml = extractFormHtml(html, formId);
+  if (!formHtml) return null;
+
+  const body = new URLSearchParams();
+  for (const match of formHtml.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)) {
+    const tag = match[1].toLowerCase();
+    const attrs = extractAttributes(match[2]);
+    if (!attrs.name || /\bdisabled\b/i.test(match[0])) continue;
+
+    const type = (attrs.type || "text").toLowerCase();
+    if ((type === "checkbox" || type === "radio") && !/\bchecked\b/i.test(match[0])) {
+      continue;
+    }
+
+    if (tag === "select") {
+      const selected = match[0].match(/<option\b[^>]*selected[^>]*value=["']([^"']*)["']/i);
+      body.append(attrs.name, selected ? htmlDecode(selected[1]) : attrs.value || "");
+      continue;
+    }
+
+    body.append(attrs.name, attrs.value || "");
+  }
+
+  const action = formAction(formHtml, baseUrl);
+  return {
+    action: action.action,
+    method: action.method,
+    body,
+    fieldCount: [...body.keys()].length,
+  };
+}
+
+function extractJsonLiteralAfterLabel(html, label) {
+  const labelIndex = html.indexOf(`${label}:`);
+  if (labelIndex < 0) return null;
+
+  const start = html.slice(labelIndex).search(/[\[{]/);
+  if (start < 0) return null;
+
+  const absoluteStart = labelIndex + start;
+  const opener = html[absoluteStart];
+  const closer = opener === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  let quote = "";
+  let escaped = false;
+
+  for (let index = absoluteStart; index < html.length; index += 1) {
+    const char = html[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      inString = true;
+      quote = char;
+      continue;
+    }
+
+    if (char === opener) depth += 1;
+    if (char === closer) depth -= 1;
+    if (depth === 0) {
+      return html.slice(absoluteStart, index + 1);
+    }
+  }
+
+  return null;
+}
+
+function parseJsonLiteralAfterLabel(html, label) {
+  const literal = extractJsonLiteralAfterLabel(html, label);
+  if (!literal) return null;
+  try {
+    return JSON.parse(literal);
+  } catch {
+    return null;
+  }
+}
+
+function extractCartUrl(html, name) {
+  const match = html.match(new RegExp(`${name}:\\s*'([^']+)'`, "i"));
+  return match ? htmlDecode(match[1]) : "";
+}
+
+function parseShoppingCartKey(result) {
+  if (!result) return "";
+  if (typeof result.json === "string" && /^[0-9a-f-]{36}$/i.test(result.json)) {
+    return result.json;
+  }
+  try {
+    const parsed = JSON.parse(result.text || "");
+    if (typeof parsed === "string" && /^[0-9a-f-]{36}$/i.test(parsed)) {
+      return parsed;
+    }
+  } catch {
+    // The official endpoint can return either a JSON string or an error array.
+  }
+  return "";
+}
+
+async function prepareOnlineStoreCart(html, cookie, referer) {
+  const token = extractAjaxAntiForgeryToken(html);
+  const cartItems = parseJsonLiteralAfterLabel(html, "cartItems");
+  const onlineStoreShoppingCartModel = parseJsonLiteralAfterLabel(
+    html,
+    "onlineStoreShoppingCartModel",
+  );
+  const addItemToCartUrl = extractCartUrl(html, "addItemToCartUrl");
+  const getOnlineStoreShoppingKeyUrl = extractCartUrl(
+    html,
+    "getOnlineStoreShoppingKeyUrl",
+  );
+
+  if (!token || !cartItems?.length || !onlineStoreShoppingCartModel) {
+    return { ok: false, error: "Official cart model was not found." };
+  }
+  if (!addItemToCartUrl || !getOnlineStoreShoppingKeyUrl) {
+    return { ok: false, error: "Official cart endpoints were not found." };
+  }
+
+  const addedItems = [];
+  let currentCookie = cookie;
+  const addResults = [];
+  for (const cartItem of cartItems) {
+    const addResult = await postAjaxAntiForgery(
+      addItemToCartUrl,
+      {
+        EventId: cartItem.EventId,
+        ObjectId: cartItem.ObjectId,
+        CartItemMembers: cartItem.CartItemMembers,
+        WidgetId: cartItem.WidgetId,
+        OccurrenceDate: cartItem.OccurrenceDate,
+        FakeEventId: cartItem.FakeEventId,
+      },
+      currentCookie,
+      referer,
+      token,
+    );
+    currentCookie = addResult.cookie || currentCookie;
+    addResults.push(safeAjaxResult(addResult));
+    if (!addResult.ok || addResult.json?.isSuccess === false) {
+      return {
+        ok: false,
+        error: addResult.json?.errors || "Official add-to-cart failed.",
+        addResults,
+      };
+    }
+    addedItems.push(cartItem);
+  }
+
+  const keyResult = await postAjaxAntiForgery(
+    getOnlineStoreShoppingKeyUrl,
+    { jsonModel: JSON.stringify(onlineStoreShoppingCartModel) },
+    currentCookie,
+    referer,
+    token,
+  );
+  currentCookie = keyResult.cookie || currentCookie;
+  const shoppingCartKey = parseShoppingCartKey(keyResult);
+  if (!shoppingCartKey) {
+    return {
+      ok: false,
+      error: "Official shopping cart key was not returned.",
+      addResults,
+      keyResult: safeAjaxResult(keyResult),
+    };
+  }
+
+  return {
+    ok: true,
+    cookie: currentCookie,
+    shoppingCartKey,
+    addedItems: addedItems.length,
+    addResults,
+    keyResult: safeAjaxResult(keyResult),
+  };
+}
+
 function extractAjaxAntiForgeryToken(html) {
   const ajaxForm = extractFormHtml(html, "AjaxAntiForgeryForm");
   const ajaxToken = ajaxForm.match(
@@ -904,7 +1102,25 @@ function analyzeRegistrationPage(html, finalUrl) {
     waitlist,
     buttons: extractButtons(html),
     forms: extractForms(html, finalUrl),
+    formDetails: extractFormDetails(html, finalUrl),
     links: extractLinks(html, finalUrl),
+  };
+}
+
+function summarizeRegistrationResult(result) {
+  if (!result) return null;
+  return {
+    title: result.title,
+    finalUrl: result.finalUrl,
+    success: result.success,
+    login: result.login,
+    needsPayment: result.needsPayment,
+    waitlist: result.waitlist,
+    status: result.status,
+    redirects: result.redirects,
+    looksLoggedIn: result.looksLoggedIn,
+    forms: result.forms,
+    formDetails: result.formDetails,
   };
 }
 
@@ -922,6 +1138,17 @@ async function submitOfficialParticipantSelection({
   let preflight = null;
   let result = null;
 
+  async function saveDebugHtml(label, page) {
+    if (!process.env.DEBUG_MARKHAM_HTML_DIR || !page?.html) return;
+    const fs = await import("node:fs/promises");
+    const safeLabel = label.replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+    await fs.writeFile(
+      `${process.env.DEBUG_MARKHAM_HTML_DIR}/markham-${safeLabel}.html`,
+      page.html,
+      "utf8",
+    );
+  }
+
   if (!dryRun) {
     preflight = await prepareOfficialRegistrationHold(
       html,
@@ -933,18 +1160,81 @@ async function submitOfficialParticipantSelection({
       return { submission, preflight, result: null };
     }
 
-    const submitted = await submitUrlEncodedForm(
+    let submitted = await submitUrlEncodedForm(
       submission.action,
       submission.body,
       preflight.cookie || cookie,
       pageUrl,
     );
+    await saveDebugHtml("after-fillforms", submitted);
     result = analyzeRegistrationPage(submitted.html || "", submitted.finalUrl);
     result.status = submitted.response?.status || 0;
     result.redirects = submitted.redirects;
     result.looksLoggedIn = submitted.html
       ? !isLoginPage(submitted.html, submitted.finalUrl)
       : false;
+
+    const extraSteps = [];
+    const autoFormIds = ["nextPageForm", "doCheckoutForm"];
+    for (let step = 0; step < 5 && !result.success; step += 1) {
+      const nextFormId = autoFormIds.find((formId) =>
+        extractFormHtml(submitted.html || "", formId),
+      );
+      if (!nextFormId) break;
+
+      const nextForm = buildFormSubmission(
+        submitted.html || "",
+        submitted.finalUrl,
+        nextFormId,
+      );
+      if (!nextForm) break;
+
+      let cartPreparation = null;
+      if (nextFormId === "doCheckoutForm") {
+        cartPreparation = await prepareOnlineStoreCart(
+          submitted.html || "",
+          submitted.cookie || preflight.cookie || cookie,
+          submitted.finalUrl,
+        );
+        if (!cartPreparation.ok) {
+          result.extraSteps = extraSteps;
+          result.cartPreparation = cartPreparation;
+          break;
+        }
+        nextForm.body.set("shoppingCartKey", cartPreparation.shoppingCartKey);
+      }
+
+      submitted = await submitUrlEncodedForm(
+        nextForm.action,
+        nextForm.body,
+        cartPreparation?.cookie || submitted.cookie || preflight.cookie || cookie,
+        submitted.finalUrl,
+      );
+      await saveDebugHtml(`after-${nextFormId}-${step}`, submitted);
+      const nextResult = analyzeRegistrationPage(submitted.html || "", submitted.finalUrl);
+      nextResult.status = submitted.response?.status || 0;
+      nextResult.redirects = submitted.redirects;
+      nextResult.looksLoggedIn = submitted.html
+        ? !isLoginPage(submitted.html, submitted.finalUrl)
+        : false;
+      extraSteps.push({
+        formId: nextFormId,
+        action: nextForm.action,
+        fieldCount: nextForm.fieldCount,
+        cartPreparation: cartPreparation
+          ? {
+              ok: cartPreparation.ok,
+              addedItems: cartPreparation.addedItems,
+              keyReturned: Boolean(cartPreparation.shoppingCartKey),
+              addResults: cartPreparation.addResults,
+              keyResult: cartPreparation.keyResult,
+            }
+          : null,
+        result: summarizeRegistrationResult(nextResult),
+      });
+      result = nextResult;
+    }
+    result.extraSteps = extraSteps;
   }
 
   return { submission, preflight, result };
@@ -1007,6 +1297,27 @@ function socialSiteRegisterUrl(registerUrl) {
 
 function uniqueUrls(urls) {
   return [...new Set(urls.filter(Boolean))];
+}
+
+function safeAjaxResult(result) {
+  if (!result) return null;
+  return {
+    status: result.status,
+    ok: result.ok,
+    finalUrl: result.finalUrl,
+    text: result.text,
+    json: result.json,
+  };
+}
+
+function safePreflight(preflight) {
+  if (!preflight) return null;
+  return {
+    ok: preflight.ok,
+    error: preflight.error || "",
+    canBook: safeAjaxResult(preflight.canBook),
+    hold: safeAjaxResult(preflight.hold),
+  };
 }
 
 function sessionSummary(row) {
@@ -1211,8 +1522,8 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
         };
     const registerUrl = findRegisterUrl(hints);
     const registerCandidates = uniqueUrls([
-      registerUrl,
       socialSiteRegisterUrl(registerUrl),
+      registerUrl,
     ]);
     const participantProbes = [];
     let officialSubmission = null;
@@ -1220,9 +1531,12 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
     let officialSubmissionResult = null;
 
     for (const url of registerCandidates) {
+      const socialSiteLogin = /\/SocialSite\//i.test(url)
+        ? await verifyPerfectMindLogin(account.email, password, url)
+        : null;
       const directPage = await fetchHtmlWithRedirects(
         url,
-        classPage.cookie || login.cookie,
+        socialSiteLogin?.cookie || classPage.cookie || login.cookie,
       );
       let directHints = directPage.html
         ? extractRegisterHints(directPage.html, directPage.finalUrl)
@@ -1274,8 +1588,8 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
         }
         participantProbes.push({
           url,
-          loginFinalUrl: participantLogin.finalUrl || "",
-          loginRedirects: participantLogin.redirects || [],
+          loginFinalUrl: participantLogin.finalUrl || socialSiteLogin?.finalUrl || "",
+          loginRedirects: participantLogin.redirects || socialSiteLogin?.redirects || [],
           status: formLogin?.response?.status || reloggedPage.response?.status || 0,
           finalUrl: formLogin?.finalUrl || reloggedPage.finalUrl,
           redirects: formLogin?.redirects || reloggedPage.redirects,
@@ -1315,7 +1629,7 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
         const official = await submitOfficialParticipantSelection({
           html: directPage.html || "",
           pageUrl: directPage.finalUrl,
-          cookie: directPage.cookie || classPage.cookie || login.cookie,
+          cookie: directPage.cookie || socialSiteLogin?.cookie || classPage.cookie || login.cookie,
           submission: directSubmission,
           dryRun,
         });
@@ -1325,8 +1639,8 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
       }
       participantProbes.push({
         url,
-        loginFinalUrl: "",
-        loginRedirects: [],
+        loginFinalUrl: socialSiteLogin?.finalUrl || "",
+        loginRedirects: socialSiteLogin?.redirects || [],
         status: directPage.response?.status || 0,
         finalUrl: directPage.finalUrl,
         redirects: directPage.redirects,
@@ -1417,7 +1731,7 @@ export async function attemptQueuedRegistration(db, queued, options = {}) {
             fieldCount: officialSubmission.fieldCount,
           }
         : null,
-      officialPreflight,
+      officialPreflight: safePreflight(officialPreflight),
       officialSubmissionResult,
       registrationConfirmed,
     };

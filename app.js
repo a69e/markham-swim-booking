@@ -15,7 +15,12 @@ let sessionAttempts = new Map();
 let sessionCheckoutUrls = new Map();
 let trackedSessions = [];
 let queueApiAvailable = true;
+let refreshInFlight = false;
+let pullStartY = 0;
+let pullDistance = 0;
+let pullTracking = false;
 
+const pullRefresh = document.querySelector("#pullRefresh");
 const locationOptions = document.querySelector("#locationOptions");
 const serviceOptions = document.querySelector("#serviceOptions");
 const locationSummary = document.querySelector("#locationSummary");
@@ -144,6 +149,44 @@ function actionClass(action) {
 
 function isRegisterAction(action) {
   return action.toLowerCase().includes("register");
+}
+
+function sessionOpenAt(session) {
+  const start = new Date(session?.startDateTime || "");
+  if (Number.isNaN(start.getTime())) return null;
+  return new Date(start.getTime() - 21 * 60 * 60 * 1000);
+}
+
+function openingSoonText(session) {
+  if (isRegisterAction(session.action)) return "";
+  const openAt = sessionOpenAt(session);
+  if (!openAt) return "";
+
+  const diff = openAt.getTime() - Date.now();
+  if (diff <= 0 || diff > 3 * 60 * 60 * 1000) return "";
+
+  const totalSeconds = Math.ceil(diff / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `open in: ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function updateCountdownLabels() {
+  document.querySelectorAll("[data-open-countdown-key]").forEach((element) => {
+    const session = filteredSessions.find(
+      (item) => queuedSessionKey(item) === element.dataset.openCountdownKey,
+    );
+    if (!session) return;
+    const text = openingSoonText(session);
+    if (text) {
+      element.textContent = text;
+      element.classList.add("countdown");
+    } else {
+      element.textContent = session.spots || "";
+      element.classList.remove("countdown");
+    }
+  });
 }
 
 function queuedSessionKey(session) {
@@ -323,15 +366,26 @@ async function registerFromRow(session, button) {
   }
 }
 
-async function runQueueWorker() {
+async function runQueueWorker({ render = true } = {}) {
   if (!accountSaved) return;
   try {
     await fetch("./api/queue-worker", { method: "POST", cache: "no-store" });
     await loadQueuedSessions();
-    renderSessions();
+    if (render) renderSessions();
   } catch {
     // The next interval or page load can try again.
   }
+}
+
+async function syncOfficialState() {
+  if (!accountSaved) return null;
+  const params = new URLSearchParams({ deviceId: deviceId() });
+  const response = await fetch(`./api/sync?${params}`, {
+    method: "POST",
+    cache: "no-store",
+  });
+  if (!response.ok) return null;
+  return response.json().catch(() => null);
 }
 
 function setAccountMessage(message, tone = "") {
@@ -615,7 +669,13 @@ function renderSessions() {
     row.querySelector(".session-main p").textContent =
       session.timeRange || session.time || "";
     row.querySelector(".session-location").textContent = session.location;
-    row.querySelector(".session-action p").textContent = session.spots || "";
+    const spotsLabel = row.querySelector(".session-action p");
+    const openingText = openingSoonText(session);
+    spotsLabel.textContent = openingText || session.spots || "";
+    spotsLabel.classList.toggle("countdown", Boolean(openingText));
+    if (openingText) {
+      spotsLabel.dataset.openCountdownKey = queuedSessionKey(session);
+    }
 
     const actionPanel = row.querySelector(".session-action");
     const button = row.querySelector("button");
@@ -696,6 +756,7 @@ function renderSessions() {
 
     sessionList.append(row);
   });
+  updateCountdownLabels();
 
   loadTrigger.hidden = statusFilterActive() || (!hasMore && queueApiAvailable);
   loadTrigger.textContent = !queueApiAvailable
@@ -770,6 +831,24 @@ async function loadSessions() {
 
   refreshFilters();
   renderSessions();
+}
+
+async function refreshAll({ sync = false, reason = "" } = {}) {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  pullRefresh.textContent = reason === "pull" ? "Refreshing..." : "Syncing...";
+  pullRefresh.classList.add("visible");
+
+  try {
+    await loadAccountStatus();
+    if (sync) await syncOfficialState();
+    if (sync && accountSaved) await runQueueWorker({ render: false });
+    await loadSessions();
+  } finally {
+    refreshInFlight = false;
+    pullRefresh.textContent = "Pull to refresh";
+    pullRefresh.classList.remove("visible", "ready", "refreshing");
+  }
 }
 
 function resetVisibleList() {
@@ -884,6 +963,57 @@ function loadMoreIfNeeded() {
 window.addEventListener("scroll", loadMoreIfNeeded, { passive: true });
 window.addEventListener("resize", loadMoreIfNeeded);
 setInterval(runQueueWorker, 60000);
+setInterval(updateCountdownLabels, 1000);
 
-loadAccountStatus();
-loadSessions();
+window.addEventListener(
+  "touchstart",
+  (event) => {
+    if (window.scrollY > 0 || refreshInFlight) return;
+    pullStartY = event.touches[0].clientY;
+    pullDistance = 0;
+    pullTracking = true;
+  },
+  { passive: true },
+);
+
+window.addEventListener(
+  "touchmove",
+  (event) => {
+    if (!pullTracking) return;
+    pullDistance = Math.max(0, event.touches[0].clientY - pullStartY);
+    if (pullDistance < 18) return;
+    pullRefresh.classList.add("visible");
+    pullRefresh.classList.toggle("ready", pullDistance > 84);
+    pullRefresh.textContent = pullDistance > 84 ? "Release to refresh" : "Pull to refresh";
+    document.documentElement.style.setProperty(
+      "--pull-distance",
+      `${Math.min(pullDistance - 18, 72)}px`,
+    );
+  },
+  { passive: true },
+);
+
+window.addEventListener("touchend", () => {
+  if (!pullTracking) return;
+  const shouldRefresh = pullDistance > 84;
+  pullTracking = false;
+  pullDistance = 0;
+  document.documentElement.style.setProperty("--pull-distance", "0px");
+  if (shouldRefresh) refreshAll({ sync: true, reason: "pull" });
+});
+
+window.addEventListener("pageshow", () => {
+  refreshAll({ sync: true, reason: "open" });
+});
+
+window.addEventListener("focus", () => {
+  refreshAll({ sync: true, reason: "focus" });
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refreshAll({ sync: true, reason: "visible" });
+  }
+});
+
+refreshAll({ sync: true, reason: "open" });

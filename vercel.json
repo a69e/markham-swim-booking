@@ -16,6 +16,9 @@
     "api/checkout.js": {
       "maxDuration": 30
     },
+    "api/sync.js": {
+      "maxDuration": 30
+    },
     "api/register.js": {
       "maxDuration": 30
     },

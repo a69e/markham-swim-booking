@@ -9,6 +9,7 @@
   --info: #f0f0f0;
   --disabled: #eaeaea;
   --shadow: 0 10px 28px rgba(0, 0, 0, 0.12);
+  --pull-distance: 0px;
 }
 
 * {
@@ -21,6 +22,7 @@ body {
   background: var(--page);
   color: var(--ink);
   font-family: -apple-system, system-ui, "Segoe UI", Arial, Helvetica, Roboto, sans-serif;
+  overscroll-behavior-y: contain;
 }
 
 button,
@@ -35,6 +37,38 @@ summary {
   margin: 0 auto;
   background: var(--surface);
   box-shadow: var(--shadow);
+  transform: translateY(var(--pull-distance));
+  transition: transform 160ms ease;
+}
+
+.pull-refresh {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  z-index: 10;
+  min-width: 128px;
+  min-height: 30px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #69696b;
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -44px);
+  transition: opacity 140ms ease, transform 140ms ease, color 140ms ease;
+}
+
+.pull-refresh.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.pull-refresh.ready {
+  color: #2a7ab0;
 }
 
 .top-bar {
@@ -418,6 +452,15 @@ summary {
   text-align: center;
   color: var(--ink);
   font-weight: 400;
+}
+
+.session-action p.countdown {
+  overflow: hidden;
+  color: #2a7ab0;
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: clip;
+  white-space: nowrap;
 }
 
 .session-action button {

@@ -16,11 +16,14 @@ let sessionCheckoutUrls = new Map();
 let trackedSessions = [];
 let queueApiAvailable = true;
 let refreshInFlight = false;
+let busyDepth = 0;
 let pullStartY = 0;
 let pullDistance = 0;
 let pullTracking = false;
 
 const pullRefresh = document.querySelector("#pullRefresh");
+const busyOverlay = document.querySelector("#busyOverlay");
+const busyLabel = document.querySelector("#busyLabel");
 const locationOptions = document.querySelector("#locationOptions");
 const serviceOptions = document.querySelector("#serviceOptions");
 const locationSummary = document.querySelector("#locationSummary");
@@ -224,6 +227,23 @@ function fitOneLine(element, maxSize = 10, minSize = 7) {
   });
 }
 
+function setBusy(active, label = "Syncing...") {
+  busyDepth = Math.max(0, busyDepth + (active ? 1 : -1));
+  const busy = busyDepth > 0;
+  document.body.classList.toggle("is-busy", busy);
+  busyOverlay.hidden = !busy;
+  if (busy) busyLabel.textContent = label;
+}
+
+async function withBusy(label, task) {
+  setBusy(true, label);
+  try {
+    return await task();
+  } finally {
+    setBusy(false);
+  }
+}
+
 function deviceId() {
   let id = localStorage.getItem("markhamSwimDeviceId");
   if (!id) {
@@ -335,35 +355,38 @@ async function attemptRegistration(session) {
 async function registerFromRow(session, button) {
   if (button.disabled) return;
   const previousText = button.textContent;
-  button.textContent = "Registering...";
-  button.disabled = true;
 
-  try {
-    const data = await attemptRegistration(session);
-    const key = queuedSessionKey(session);
-    if (data.actionRequired && data.checkoutUrl) {
-      actionRequiredKeys.add(key);
+  await withBusy("Registering...", async () => {
+    button.textContent = "Registering...";
+    button.disabled = true;
+
+    try {
+      const data = await attemptRegistration(session);
+      const key = queuedSessionKey(session);
+      if (data.actionRequired && data.checkoutUrl) {
+        actionRequiredKeys.add(key);
+        queuedKeys.delete(key);
+        registeredKeys.delete(key);
+        sessionStatuses.set(key, "action_required");
+        sessionCheckoutUrls.set(key, data.checkoutUrl);
+        await loadQueuedSessions();
+        renderSessions();
+      } else {
+        button.textContent = "Registered";
+        button.className = "registered";
+        button.disabled = true;
+      }
+    } catch (error) {
+      const key = queuedSessionKey(session);
       queuedKeys.delete(key);
-      registeredKeys.delete(key);
-      sessionStatuses.set(key, "action_required");
-      sessionCheckoutUrls.set(key, data.checkoutUrl);
-      await loadQueuedSessions();
-      renderSessions();
-    } else {
-      button.textContent = "Registered";
-      button.className = "registered";
-      button.disabled = true;
+      sessionStatuses.set(key, "failed");
+      button.textContent = "Failed";
+      setTimeout(() => {
+        button.textContent = previousText;
+        button.disabled = false;
+      }, 2200);
     }
-  } catch (error) {
-    const key = queuedSessionKey(session);
-    queuedKeys.delete(key);
-    sessionStatuses.set(key, "failed");
-    button.textContent = "Failed";
-    setTimeout(() => {
-      button.textContent = previousText;
-      button.disabled = false;
-    }, 2200);
-  }
+  });
 }
 
 async function runQueueWorker({ render = true } = {}) {
@@ -838,6 +861,7 @@ async function refreshAll({ sync = false, reason = "" } = {}) {
   refreshInFlight = true;
   pullRefresh.textContent = reason === "pull" ? "Refreshing..." : "Syncing...";
   pullRefresh.classList.add("visible");
+  setBusy(true, "Syncing...");
 
   try {
     await loadAccountStatus();
@@ -846,6 +870,7 @@ async function refreshAll({ sync = false, reason = "" } = {}) {
     await loadSessions();
   } finally {
     refreshInFlight = false;
+    setBusy(false);
     pullRefresh.textContent = "Pull to refresh";
     pullRefresh.classList.remove("visible", "ready", "refreshing");
   }

@@ -71,6 +71,37 @@ summary {
   color: #2a7ab0;
 }
 
+.busy-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.busy-overlay[hidden] {
+  display: none;
+}
+
+.busy-pill {
+  min-width: 126px;
+  min-height: 36px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #2a7ab0;
+  font-size: 13px;
+  line-height: 1.2;
+  text-align: center;
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.22);
+}
+
+body.is-busy .app-shell {
+  pointer-events: none;
+  user-select: none;
+}
+
 .top-bar {
   position: sticky;
   top: 0;

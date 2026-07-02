@@ -503,7 +503,7 @@ body.is-busy .app-shell {
   min-height: 34px;
   padding: 0 8px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 4px;
   background: #2b7ab1;
   color: #ffffff;
   font-size: 13px;
@@ -538,12 +538,13 @@ body.is-busy .app-shell {
 
 .status-badge {
   display: grid;
-  width: 100%;
-  min-height: 34px;
-  padding: 0 10px;
+  justify-self: center;
+  min-width: 72px;
+  min-height: 24px;
+  padding: 0 9px;
   border-radius: 999px;
   place-items: center;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.2;
   font-weight: 400;
   text-align: center;

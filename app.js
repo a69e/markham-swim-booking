@@ -236,6 +236,11 @@ function statusBadge(text, className) {
   return badge;
 }
 
+function displaySpots(session) {
+  const spots = String(session?.spots || "").trim();
+  return /^(queued|registered|checkout|action required)$/i.test(spots) ? "" : spots;
+}
+
 function setBusy(active, label = "Syncing...") {
   busyDepth = Math.max(0, busyDepth + (active ? 1 : -1));
   const busy = busyDepth > 0;
@@ -732,7 +737,7 @@ function renderSessions() {
     row.querySelector(".session-location").textContent = session.location;
     const spotsLabel = row.querySelector(".session-action p");
     const openingText = openingSoonText(session);
-    spotsLabel.textContent = openingText || session.spots || "";
+    spotsLabel.textContent = openingText || displaySpots(session);
     spotsLabel.classList.toggle("countdown", Boolean(openingText));
     if (openingText) {
       spotsLabel.dataset.openCountdownKey = queuedSessionKey(session);
@@ -793,9 +798,7 @@ function renderSessions() {
 
         try {
           await saveQueuedSession(session);
-          button.textContent = "Queued";
-          button.className = "queued";
-          button.disabled = true;
+          button.replaceWith(statusBadge("Queued", "queued"));
         } catch {
           queueApiAvailable = false;
           button.textContent = "Queue failed";
@@ -901,8 +904,10 @@ async function loadSessions() {
 async function refreshAll({ sync = false, reason = "" } = {}) {
   if (refreshInFlight) return;
   refreshInFlight = true;
-  pullRefresh.textContent = reason === "pull" ? "Refreshing..." : "Syncing...";
-  pullRefresh.classList.add("visible");
+  if (reason === "pull") {
+    pullRefresh.textContent = "Refreshing...";
+    pullRefresh.classList.add("visible");
+  }
   setBusy(true, "Syncing...");
 
   try {

@@ -732,6 +732,8 @@ function renderSessions() {
     const row = template.content.firstElementChild.cloneNode(true);
     const serviceLink = row.querySelector("h2 a");
     serviceLink.textContent = session.service;
+    serviceLink.href = session.url || "#";
+    if (!session.url) serviceLink.removeAttribute("href");
 
     row.querySelector(".session-main p").textContent =
       session.timeRange || session.time || "";
@@ -790,8 +792,6 @@ function renderSessions() {
       });
       button.addEventListener("click", () => registerFromRow(session, button));
     } else if (!isQueued && buttonClass !== "full") {
-      serviceLink.href = session.url || "#";
-      if (!session.url) serviceLink.removeAttribute("href");
       button.addEventListener("click", async () => {
         const previousText = button.textContent;
         button.textContent = "Saving...";
@@ -810,8 +810,6 @@ function renderSessions() {
         }
       });
     } else {
-      serviceLink.href = session.url || "#";
-      if (!session.url) serviceLink.removeAttribute("href");
     }
 
     const attempt = attemptText(queueKey);

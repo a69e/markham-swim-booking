@@ -889,6 +889,13 @@ function parseShoppingCartKey(result) {
   return "";
 }
 
+function encodeCheckoutPostTarget(action, body) {
+  return `checkout-post:${JSON.stringify({
+    action,
+    fields: [...body.entries()],
+  })}`;
+}
+
 async function prepareOnlineStoreCart(html, cookie, referer) {
   const token = extractAjaxAntiForgeryToken(html);
   const cartItems = parseJsonLiteralAfterLabel(html, "cartItems");
@@ -1314,6 +1321,44 @@ async function submitOfficialParticipantSelection({
           break;
         }
         nextForm.body.set("shoppingCartKey", cartPreparation.shoppingCartKey);
+        const checkoutTarget = encodeCheckoutPostTarget(nextForm.action, nextForm.body);
+        extraSteps.push({
+          formId: nextFormId,
+          action: nextForm.action,
+          fieldCount: nextForm.fieldCount,
+          checkoutTarget,
+          cartPreparation: {
+            ok: cartPreparation.ok,
+            addedItems: cartPreparation.addedItems,
+            keyReturned: Boolean(cartPreparation.shoppingCartKey),
+            addResults: cartPreparation.addResults,
+            keyResult: cartPreparation.keyResult,
+          },
+          result: {
+            title: "Checkout",
+            finalUrl: nextForm.action,
+            checkoutUrl: checkoutTarget,
+            success: false,
+            login: false,
+            needsPayment: true,
+            waitlist: false,
+            status: 0,
+            redirects: [],
+            looksLoggedIn: true,
+            forms: [],
+            formDetails: [],
+          },
+        });
+        result = {
+          ...result,
+          title: "Checkout",
+          finalUrl: nextForm.action,
+          checkoutUrl: checkoutTarget,
+          needsPayment: true,
+          success: false,
+          extraSteps,
+        };
+        break;
       }
 
       submitted = await submitUrlEncodedForm(
@@ -1591,6 +1636,7 @@ function checkoutUrlFromResult(result) {
   if (!result) return "";
   const candidates = [
     result.checkoutUrl,
+    ...(result.extraSteps || []).map((step) => step.checkoutTarget),
     ...(result.extraSteps || []).map((step) => step.result?.checkoutUrl),
     result.finalUrl,
     ...(result.extraSteps || []).map((step) => step.result?.finalUrl),

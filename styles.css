@@ -604,7 +604,7 @@ body.is-busy .app-shell {
   top: 0;
   z-index: 2;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 10px;
   align-items: center;
   padding: 12px;
@@ -612,21 +612,15 @@ body.is-busy .app-shell {
   border-bottom: 1px solid var(--line);
 }
 
-.checkout-back,
-.checkout-open {
+.checkout-back {
   min-height: 34px;
   padding: 0 12px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 4px;
   background: #2b7ab1;
   color: #ffffff;
   font-size: 12px;
   font-weight: 400;
-}
-
-.checkout-open {
-  background: #f0f0f0;
-  color: #333333;
 }
 
 .checkout-title-wrap {
@@ -662,26 +656,6 @@ body.is-busy .app-shell {
   color: #69696b;
   font-size: 13px;
   line-height: 1.35;
-}
-
-.checkout-inline-open {
-  justify-self: start;
-  min-height: 34px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 4px;
-  background: #2b7ab1;
-  color: #ffffff;
-  font-size: 13px;
-  font-weight: 400;
-}
-
-.checkout-frame {
-  width: 100%;
-  min-height: calc(100vh - 124px);
-  border: 1px solid #d8d8d8;
-  border-radius: 12px;
-  background: #ffffff;
 }
 
 .account-dialog {

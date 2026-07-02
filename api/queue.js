@@ -1,5 +1,9 @@
 import { accountScopeForDevice, ensureQueueSchema, getSql } from "../lib/db.js";
 
+function checkoutAppUrl(token) {
+  return `./checkout.html?token=${encodeURIComponent(token)}`;
+}
+
 function sessionKey(session) {
   return [
     session?.service || "",
@@ -154,7 +158,7 @@ export default async function handler(request, response) {
             row.checkout_token &&
             (!row.checkout_token_expires_at ||
               new Date(row.checkout_token_expires_at) > new Date())
-              ? `./api/checkout?token=${encodeURIComponent(row.checkout_token)}`
+              ? checkoutAppUrl(row.checkout_token)
               : "",
         })),
       });

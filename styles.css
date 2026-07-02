@@ -25,6 +25,10 @@ body {
   overscroll-behavior-y: contain;
 }
 
+body.checkout-page {
+  background: #f2f2f2;
+}
+
 button,
 select,
 summary {
@@ -499,7 +503,7 @@ body.is-busy .app-shell {
   min-height: 34px;
   padding: 0 8px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 999px;
   background: #2b7ab1;
   color: #ffffff;
   font-size: 13px;
@@ -532,6 +536,29 @@ body.is-busy .app-shell {
   color: #ffffff;
 }
 
+.status-badge {
+  display: grid;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 999px;
+  place-items: center;
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 400;
+  text-align: center;
+}
+
+.status-badge.queued {
+  background: #f4cc8b;
+  color: #744f10;
+}
+
+.status-badge.registered {
+  background: #2f8f46;
+  color: #ffffff;
+}
+
 .attempt-meta {
   display: block;
   margin-top: 4px;
@@ -561,6 +588,87 @@ body.is-busy .app-shell {
   color: var(--muted);
   text-align: center;
   line-height: 1.45;
+}
+
+.checkout-shell {
+  width: min(100%, 430px);
+  min-height: 100vh;
+  margin: 0 auto;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.checkout-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--line);
+}
+
+.checkout-back,
+.checkout-open {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: #2b7ab1;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.checkout-open {
+  background: #f0f0f0;
+  color: #333333;
+}
+
+.checkout-title-wrap {
+  min-width: 0;
+}
+
+.checkout-title {
+  margin: 0;
+  color: #000000;
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.checkout-subtitle {
+  margin: 4px 0 0;
+  color: #69696b;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.checkout-frame-wrap {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: calc(100vh - 76px);
+  padding: 12px;
+  background: #f7f7f7;
+}
+
+.checkout-message {
+  margin: 0;
+  color: #69696b;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.checkout-frame {
+  width: 100%;
+  min-height: calc(100vh - 124px);
+  border: 1px solid #d8d8d8;
+  border-radius: 12px;
+  background: #ffffff;
 }
 
 .account-dialog {

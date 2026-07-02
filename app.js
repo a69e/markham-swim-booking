@@ -229,6 +229,13 @@ function fitOneLine(element, maxSize = 10, minSize = 7) {
   });
 }
 
+function statusBadge(text, className) {
+  const badge = document.createElement("span");
+  badge.className = `status-badge ${className}`;
+  badge.textContent = text;
+  return badge;
+}
+
 function setBusy(active, label = "Syncing...") {
   busyDepth = Math.max(0, busyDepth + (active ? 1 : -1));
   const busy = busyDepth > 0;
@@ -761,7 +768,11 @@ function renderSessions() {
           ? "queued"
           : buttonClass;
     button.disabled = (!isActionRequired && buttonClass === "full") || isRegistered || isQueued;
-    if (isActionRequired && checkoutUrl) {
+    if (isRegistered) {
+      button.replaceWith(statusBadge("Registered", "registered"));
+    } else if (isQueued) {
+      button.replaceWith(statusBadge("Queued", "queued"));
+    } else if (isActionRequired && checkoutUrl) {
       button.addEventListener("click", () => {
         window.location.href = checkoutUrl;
       });

@@ -28,7 +28,7 @@ function appBaseUrl() {
 }
 
 function publicCheckoutUrl(token) {
-  return `${appBaseUrl().replace(/\/$/, "")}/api/checkout?token=${encodeURIComponent(token)}`;
+  return `${appBaseUrl().replace(/\/$/, "")}/checkout.html?token=${encodeURIComponent(token)}`;
 }
 
 function validateDeviceId(deviceId) {

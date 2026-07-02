@@ -33,6 +33,13 @@ export default async function handler(request, response) {
       iv: rows[0].checkout_url_iv,
       tag: rows[0].checkout_url_tag,
     });
+
+    if (request.query.format === "json") {
+      response.setHeader("Cache-Control", "no-store");
+      response.status(200).json({ ok: true, checkoutUrl });
+      return;
+    }
+
     response.writeHead(302, { Location: checkoutUrl });
     response.end();
   } catch (error) {

@@ -1,9 +1,9 @@
 import { accountScopeForDevice, ensureQueueSchema, getSql } from "../lib/db.js";
 import { fetchLiveClassPages } from "../lib/live-classes.js";
 import {
-  probeOfficialRegisteredParticipants,
-  probeOfficialRegistrationStatus,
-} from "./register.js";
+  fetchOfficialScheduleEvents,
+  normalizeScheduleEvent,
+} from "../lib/official-schedule.js";
 
 function validateDeviceId(deviceId) {
   if (typeof deviceId !== "string" || deviceId.length < 8) {
@@ -37,6 +37,10 @@ function parseSessionTimes(session) {
     startAt: start ? start.toISOString() : null,
     endAt: end ? end.toISOString() : null,
   };
+}
+
+function officialScheduleKey(contactId, eventId, occurrenceDate) {
+  return `${contactId || ""}|${eventId || ""}|${occurrenceDate || ""}`;
 }
 
 async function rowsForScope(db, deviceId, accountIds) {
@@ -78,14 +82,57 @@ export default async function handler(request, response) {
     let updated = 0;
     let deleted = 0;
     let checkoutExpired = 0;
-    let officialRegistered = 0;
     let officialUnregistered = 0;
     let officialImported = 0;
+    let officialScheduleSynced = false;
+    let officialScheduleError = "";
     const now = new Date();
-    const hasActionRequiredRows = trackedRows.some(
-      (row) => row.status === "action_required",
+    const attendeeRows = scope.accountIds.length
+      ? await db`
+          select distinct on (member_id)
+            id,
+            member_id,
+            full_name
+          from account_attendees
+          where account_id = any(${scope.accountIds})
+          order by member_id, updated_at desc
+        `
+      : [];
+    const attendeeById = new Map(attendeeRows.map((attendee) => [String(attendee.id), attendee]));
+    const attendeeByMemberId = new Map(
+      attendeeRows.map((attendee) => [attendee.member_id, attendee]),
     );
-    let officialStatusChecks = 0;
+    let officialScheduleEvents = [];
+    if (scope.account && attendeeRows.length) {
+      try {
+        officialScheduleEvents = await fetchOfficialScheduleEvents(scope.account, attendeeRows);
+        officialScheduleSynced = true;
+      } catch (error) {
+        officialScheduleError = error.message;
+      }
+    }
+    const officialScheduleSessions = officialScheduleEvents.map((event) => ({
+      event,
+      normalized: normalizeScheduleEvent(event),
+    }));
+    const officialScheduleKeys = new Set(
+      officialScheduleSessions.map(({ normalized }) =>
+        officialScheduleKey(
+          normalized.contactId,
+          normalized.eventId,
+          normalized.occurrenceDate,
+        ),
+      ),
+    );
+
+    function rowOfficialKey(row) {
+      const attendee = attendeeById.get(String(row.attendee_id || ""));
+      return officialScheduleKey(
+        row.session?.contactId || attendee?.member_id || "",
+        row.session?.eventId || "",
+        row.session?.occurrenceDate || "",
+      );
+    }
 
     for (const row of trackedRows) {
       const rowLiveKey = liveKey(row.session);
@@ -144,16 +191,8 @@ export default async function handler(request, response) {
         continue;
       }
 
-      if (
-        (row.status === "action_required" || row.status === "registered") &&
-        officialStatusChecks < 3
-      ) {
-        officialStatusChecks += 1;
-        const officialStatus = await probeOfficialRegistrationStatus(db, {
-          ...row,
-          session: nextSession,
-        }).catch((error) => ({ ok: false, error: error.message }));
-        if (officialStatus.registeredLikely) {
+      if (officialScheduleSynced && row.status === "action_required") {
+        if (officialScheduleKeys.has(rowOfficialKey({ ...row, session: nextSession }))) {
           await db`
             update queued_sessions
             set status = 'registered',
@@ -171,10 +210,13 @@ export default async function handler(request, response) {
                 updated_at = now()
             where id = ${row.id}
           `;
-          officialRegistered += 1;
+          officialImported += 1;
           continue;
         }
-        if (row.status === "registered" && officialStatus.ok) {
+      }
+
+      if (officialScheduleSynced && row.status === "registered") {
+        if (!officialScheduleKeys.has(rowOfficialKey({ ...row, session: nextSession }))) {
           await db`
             delete from queued_sessions
             where id = ${row.id}
@@ -198,30 +240,47 @@ export default async function handler(request, response) {
       }
     }
 
-    if (scope.account && !hasActionRequiredRows) {
-      const probeLimit = Math.max(
-        0,
-        Math.min(4, Number(request.query.officialImportLimit || 0) || 0),
-      );
-      const importProbe = await probeOfficialRegisteredParticipants(
-        scope.account,
-        liveSessions,
-        probeLimit,
-      ).catch((error) => ({ checked: 0, registered: [], errors: [error.message] }));
-      const attendeeRows = await db`
-        select id, member_id
-        from account_attendees
-        where account_id = ${scope.account.id}
-      `;
-      const attendeeByMemberId = new Map(
-        attendeeRows.map((attendee) => [attendee.member_id, attendee.id]),
-      );
-
-      for (const official of importProbe.registered || []) {
-        const attendeeId = attendeeByMemberId.get(official.memberId);
-        if (!attendeeId) continue;
-        const key = sessionKey(official.session);
-        const { startAt, endAt } = parseSessionTimes(official.session);
+    if (officialScheduleSynced) {
+      for (const { event, normalized } of officialScheduleSessions) {
+        const attendee = attendeeByMemberId.get(normalized.contactId || event.ContactId || "");
+        if (!attendee) continue;
+        const liveSession = byLiveKey.get(liveKey(normalized));
+        const session = {
+          ...(liveSession || normalized),
+          attendanceId: normalized.attendanceId,
+          contactId: normalized.contactId,
+        };
+        const key = sessionKey(session);
+        const { startAt, endAt } = parseSessionTimes(session);
+        const existingRows = await db`
+          select id
+          from queued_sessions
+          where account_id = any(${scope.accountIds})
+            and attendee_id = ${attendee.id}
+            and session->>'eventId' = ${session.eventId}
+            and session->>'occurrenceDate' = ${session.occurrenceDate}
+          order by updated_at desc
+          limit 1
+        `;
+        if (existingRows.length) {
+          await db`
+            update queued_sessions
+            set device_id = ${deviceId},
+                account_id = ${scope.account.id},
+                attendee_id = ${attendee.id},
+                session_key = ${key},
+                session = ${JSON.stringify(session)},
+                status = 'registered',
+                start_at = ${startAt},
+                end_at = ${endAt},
+                registered_at = coalesce(registered_at, now()),
+                last_attempt_at = now(),
+                last_error = '',
+                updated_at = now()
+            where id = ${existingRows[0].id}
+          `;
+          continue;
+        }
         await db`
           insert into queued_sessions (
             device_id,
@@ -239,9 +298,9 @@ export default async function handler(request, response) {
           values (
             ${deviceId},
             ${scope.account.id},
-            ${attendeeId},
+            ${attendee.id},
             ${key},
-            ${JSON.stringify(official.session)},
+            ${JSON.stringify(session)},
             'registered',
             ${startAt},
             ${endAt},
@@ -275,9 +334,10 @@ export default async function handler(request, response) {
       updated,
       deleted,
       checkoutExpired,
-      officialRegistered,
       officialUnregistered,
       officialImported,
+      officialScheduleSynced,
+      officialScheduleError,
       syncedAt: new Date().toISOString(),
     });
   } catch (error) {

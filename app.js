@@ -7,6 +7,7 @@ let filteredSessions = [];
 let nextKey = null;
 let hasMore = true;
 let isLoadingMore = false;
+let fillInFlight = false;
 let queuedKeys = new Set();
 let registeredKeys = new Set();
 let actionRequiredKeys = new Set();
@@ -826,12 +827,15 @@ function renderSessions() {
   });
   updateCountdownLabels();
 
-  loadTrigger.hidden = statusFilterActive() || (!hasMore && queueApiAvailable);
+  loadTrigger.hidden =
+    statusFilterActive() || (queueApiAvailable && !isLoadingMore);
   loadTrigger.textContent = !queueApiAvailable
     ? "Queue database is not connected."
-    : hasMore && !statusFilterActive()
+    : isLoadingMore && !statusFilterActive()
       ? "Loading more..."
       : "";
+
+  scheduleFillIfNeeded();
 }
 
 sessionList.addEventListener("click", (event) => {
@@ -1006,6 +1010,7 @@ document.addEventListener("keydown", (event) => {
 async function loadMoreSessions() {
   if (statusFilterActive() || !hasMore || isLoadingMore || !nextKey) return;
   isLoadingMore = true;
+  loadTrigger.hidden = false;
   loadTrigger.textContent = "Loading more...";
 
   try {
@@ -1019,6 +1024,10 @@ async function loadMoreSessions() {
     loadTrigger.textContent = "Could not load more sessions.";
   } finally {
     isLoadingMore = false;
+    if (queueApiAvailable) {
+      loadTrigger.textContent = "";
+      loadTrigger.hidden = true;
+    }
   }
 }
 
@@ -1030,6 +1039,32 @@ function loadMoreIfNeeded() {
   if (scrollPosition < triggerPosition) return;
 
   loadMoreSessions();
+}
+
+function pageNeedsMoreRows() {
+  if (statusFilterActive() || !hasMore || isLoadingMore || !nextKey) return false;
+  return document.documentElement.scrollHeight <= window.innerHeight + 260;
+}
+
+async function fillVisiblePage() {
+  if (fillInFlight) return;
+  fillInFlight = true;
+
+  try {
+    while (pageNeedsMoreRows()) {
+      await loadMoreSessions();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+  } finally {
+    fillInFlight = false;
+  }
+}
+
+function scheduleFillIfNeeded() {
+  if (statusFilterActive() || fillInFlight) return;
+  requestAnimationFrame(() => {
+    if (pageNeedsMoreRows()) fillVisiblePage();
+  });
 }
 
 window.addEventListener("scroll", loadMoreIfNeeded, { passive: true });

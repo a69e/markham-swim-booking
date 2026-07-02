@@ -1,7 +1,9 @@
 const backButton = document.querySelector("#checkoutBack");
 const openButton = document.querySelector("#checkoutOpen");
+const inlineOpenButton = document.querySelector("#checkoutOpenInline");
 const message = document.querySelector("#checkoutMessage");
 const frame = document.querySelector("#checkoutFrame");
+let officialCheckoutUrl = "";
 
 function homeUrl() {
   return "./";
@@ -28,16 +30,29 @@ async function loadCheckout() {
       throw new Error(data.error || "Checkout link expired.");
     }
 
+    officialCheckoutUrl = data.checkoutUrl;
     openButton.hidden = false;
-    openButton.addEventListener("click", () => {
-      window.location.href = data.checkoutUrl;
-    });
+    inlineOpenButton.hidden = false;
     frame.src = data.checkoutUrl;
-    message.hidden = true;
+    message.textContent = "Opening official checkout...";
+    window.setTimeout(() => {
+      message.textContent = "If checkout stays blank, open the official checkout.";
+    }, 2200);
   } catch (error) {
     message.textContent = error.message || "Checkout could not be opened.";
   }
 }
+
+function openOfficialCheckout() {
+  if (officialCheckoutUrl) window.location.href = officialCheckoutUrl;
+}
+
+openButton.addEventListener("click", openOfficialCheckout);
+inlineOpenButton.addEventListener("click", openOfficialCheckout);
+
+frame.addEventListener("load", () => {
+  if (frame.src) message.hidden = true;
+});
 
 backButton.addEventListener("click", () => {
   window.location.href = homeUrl();

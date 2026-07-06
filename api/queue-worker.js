@@ -2,17 +2,6 @@ import { ensureQueueSchema, getSql } from "../lib/db.js";
 import { fetchLiveClassPages } from "../lib/live-classes.js";
 import { attemptQueuedRegistration } from "./register.js";
 
-function cronAuthorized(request) {
-  const secret = process.env.CRON_SECRET || "";
-  if (!secret) return true;
-
-  const token =
-    request.headers["x-cron-secret"] ||
-    request.query?.token ||
-    "";
-  return token === secret;
-}
-
 function runSource(request) {
   const headerSource = request.headers["x-cron-source"];
   if (typeof headerSource === "string" && headerSource.trim()) {
@@ -131,11 +120,6 @@ export default async function handler(request, response) {
   }
 
   try {
-    if (!cronAuthorized(request)) {
-      response.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-
     await ensureQueueSchema();
     const db = getSql();
     const liveSync = await syncQueuedRowsWithLiveClasses(db);

@@ -10,6 +10,10 @@ function checkoutUrl(token) {
   return `./api/checkout?token=${encodeURIComponent(token)}`;
 }
 
+function openedKey(token) {
+  return `markhamCheckoutOpened:${token}`;
+}
+
 function openCheckout() {
   const token = tokenFromLocation();
   if (!token) {
@@ -17,6 +21,15 @@ function openCheckout() {
     return;
   }
 
+  if (sessionStorage.getItem(openedKey(token)) === "true") {
+    message.textContent = "Checking registration status...";
+    window.setTimeout(() => {
+      window.location.href = "./?checkoutReturn=1";
+    }, 700);
+    return;
+  }
+
+  sessionStorage.setItem(openedKey(token), "true");
   message.textContent = "Opening City of Markham checkout...";
   window.setTimeout(() => {
     window.location.href = checkoutUrl(token);

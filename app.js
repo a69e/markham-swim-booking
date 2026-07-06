@@ -782,6 +782,8 @@ function renderSessions() {
       button.replaceWith(statusBadge("Queued", "queued"));
     } else if (isActionRequired && checkoutUrl) {
       button.addEventListener("click", () => {
+        const token = new URL(checkoutUrl, window.location.href).searchParams.get("token");
+        if (token) sessionStorage.removeItem(`markhamCheckoutOpened:${token}`);
         window.location.href = checkoutUrl;
       });
     } else if (!isRegistered && !isQueued && isRegisterAction(session.action) && session.url) {

@@ -13,6 +13,18 @@ function cronAuthorized(request) {
   return token === secret;
 }
 
+function runSource(request) {
+  const headerSource = request.headers["x-cron-source"];
+  if (typeof headerSource === "string" && headerSource.trim()) {
+    return headerSource.trim().slice(0, 60);
+  }
+  const querySource = request.query?.source;
+  if (typeof querySource === "string" && querySource.trim()) {
+    return querySource.trim().slice(0, 60);
+  }
+  return "external";
+}
+
 async function activeQueuedRows(db) {
   return db`
     select queued_sessions.*
@@ -161,11 +173,38 @@ export default async function handler(request, response) {
       }
     }
 
+    const registeredCount = results.filter((result) => result.registered).length;
+    const actionRequiredCount = results.filter((result) => result.actionRequired).length;
+    const errorCount = results.filter((result) => !result.ok).length;
+    await db`
+      insert into queue_worker_runs (
+        source,
+        ok,
+        checked_count,
+        registered_count,
+        action_required_count,
+        error_count,
+        message
+      )
+      values (
+        ${runSource(request)},
+        ${errorCount === 0},
+        ${rows.length},
+        ${registeredCount},
+        ${actionRequiredCount},
+        ${errorCount},
+        ${JSON.stringify({ liveSync, results: results.slice(0, 8) })}
+      )
+    `;
+
     response.setHeader("Cache-Control", "no-store");
     response.status(200).json({
       ok: true,
       liveSync,
       checked: rows.length,
+      registeredCount,
+      actionRequiredCount,
+      errorCount,
       results,
     });
   } catch (error) {

@@ -69,5 +69,17 @@ create table if not exists push_subscriptions (
   last_error text
 );
 
+create table if not exists queue_worker_runs (
+  id bigserial primary key,
+  source text not null default 'external',
+  ok boolean not null default true,
+  checked_count int not null default 0,
+  registered_count int not null default 0,
+  action_required_count int not null default 0,
+  error_count int not null default 0,
+  message text,
+  created_at timestamptz not null default now()
+);
+
 create unique index if not exists queued_sessions_device_attendee_session_key_idx
 on queued_sessions (device_id, attendee_id, session_key);

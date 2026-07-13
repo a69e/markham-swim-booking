@@ -58,7 +58,7 @@ function validateDeviceId(deviceId) {
   }
 }
 
-async function defaultAttendeeForDevice(db, deviceId) {
+async function selectedAttendeeForDevice(db, deviceId) {
   const rows = await db`
     select
       account_credentials.id as account_id,
@@ -79,11 +79,30 @@ async function defaultAttendeeForDevice(db, deviceId) {
   if (!rows[0].attendee_id) {
     throw new Error("Attendees were not loaded during login. Please login again.");
   }
-  if (!rows[0].has_free_pass) {
-    throw new Error(`${rows[0].full_name} does not have a free pass. Automatic registration is disabled for paid registrations.`);
-  }
-
   return rows[0];
+}
+
+async function defaultAttendeeForDevice(db, deviceId) {
+  const attendee = await selectedAttendeeForDevice(db, deviceId);
+  if (!attendee.has_free_pass) {
+    throw new Error(`${attendee.full_name} does not have a free pass. Automatic registration is disabled for paid registrations.`);
+  }
+  return attendee;
+}
+
+function attendeeFilterSql(db, scope, attendee, deviceId) {
+  return scope.accountIds.length
+    ? db`
+        queued_sessions.account_id = any(${scope.accountIds})
+        and (
+          account_attendees.member_id = ${attendee.member_id}
+          or queued_sessions.attendee_id = ${attendee.attendee_id}
+        )
+      `
+    : db`
+        queued_sessions.device_id = ${deviceId}
+        and queued_sessions.attendee_id = ${attendee.attendee_id}
+      `;
 }
 
 export default async function handler(request, response) {
@@ -96,9 +115,9 @@ export default async function handler(request, response) {
         typeof request.query.deviceId === "string" ? request.query.deviceId : "";
       validateDeviceId(deviceId);
       const scope = await accountScopeForDevice(db, deviceId);
+      const selectedAttendee = await selectedAttendeeForDevice(db, deviceId);
 
-      const rows = scope.accountIds.length
-        ? await db`
+      const rows = await db`
             select
               queued_sessions.session_key,
               queued_sessions.session,
@@ -120,32 +139,7 @@ export default async function handler(request, response) {
             from queued_sessions
             left join account_attendees
               on account_attendees.id = queued_sessions.attendee_id
-            where queued_sessions.account_id = any(${scope.accountIds})
-            order by queued_sessions.created_at desc
-          `
-        : await db`
-            select
-              queued_sessions.session_key,
-              queued_sessions.session,
-              queued_sessions.status,
-              queued_sessions.start_at,
-              queued_sessions.end_at,
-              queued_sessions.registered_at,
-              queued_sessions.last_attempt_at,
-              queued_sessions.last_error,
-              queued_sessions.action_required_at,
-              queued_sessions.checkout_token,
-              queued_sessions.checkout_token_expires_at,
-              queued_sessions.notified_at,
-              queued_sessions.notification_error,
-              queued_sessions.created_at,
-              queued_sessions.attendee_id,
-              account_attendees.full_name as attendee_name,
-              account_attendees.has_free_pass
-            from queued_sessions
-            left join account_attendees
-              on account_attendees.id = queued_sessions.attendee_id
-            where queued_sessions.device_id = ${deviceId}
+            where ${attendeeFilterSql(db, scope, selectedAttendee, deviceId)}
             order by queued_sessions.created_at desc
           `;
 

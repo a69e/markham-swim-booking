@@ -624,6 +624,8 @@ async function selectAttendee(attendeeId) {
   updateAccountButton(true, accountEmail.value, data.displayName);
   renderAttendeeMenu();
   accountDropdown.hidden = true;
+  await loadQueuedSessions();
+  renderSessions();
 }
 
 async function loadAccountStatus() {
@@ -917,6 +919,7 @@ async function refreshAll({ sync = false, reason = "" } = {}) {
   try {
     await loadAccountStatus();
     if (sync) await syncOfficialState();
+    if (sync && accountSaved) await loadAttendees();
     if (sync && accountSaved) await runQueueWorker({ render: false });
     await loadSessions();
   } finally {

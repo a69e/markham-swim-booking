@@ -1,9 +1,12 @@
 import { accountScopeForDevice, ensureQueueSchema, getSql } from "../lib/db.js";
+import { decryptText } from "../lib/crypto.js";
+import { syncAttendeesFromOfficialSite } from "../lib/attendee-sync.js";
 import { fetchLiveClassPages } from "../lib/live-classes.js";
 import {
   fetchOfficialScheduleEvents,
   normalizeScheduleEvent,
 } from "../lib/official-schedule.js";
+import { verifyPerfectMindLogin } from "./account.js";
 
 function validateDeviceId(deviceId) {
   if (typeof deviceId !== "string" || deviceId.length < 8) {
@@ -86,7 +89,35 @@ export default async function handler(request, response) {
     let officialImported = 0;
     let officialScheduleSynced = false;
     let officialScheduleError = "";
+    let attendeePassSynced = false;
+    let attendeePassSyncError = "";
+    let attendeePassSync = null;
     const now = new Date();
+    if (scope.account) {
+      try {
+        const password = decryptText({
+          cipher: scope.account.password_cipher,
+          iv: scope.account.password_iv,
+          tag: scope.account.password_tag,
+        });
+        const login = await verifyPerfectMindLogin(scope.account.email, password);
+        attendeePassSync = await syncAttendeesFromOfficialSite(
+          db,
+          scope.account.id,
+          login.cookie,
+          {
+            email: scope.account.email,
+            password,
+          },
+        );
+        attendeePassSynced = Boolean(attendeePassSync?.ok);
+        if (!attendeePassSynced) {
+          attendeePassSyncError = attendeePassSync?.error || "Attendee pass sync failed.";
+        }
+      } catch (error) {
+        attendeePassSyncError = error.message;
+      }
+    }
     const attendeeRows = scope.accountIds.length
       ? await db`
           select distinct on (member_id)
@@ -338,6 +369,9 @@ export default async function handler(request, response) {
       officialImported,
       officialScheduleSynced,
       officialScheduleError,
+      attendeePassSynced,
+      attendeePassSyncError,
+      attendeePassSync,
       syncedAt: new Date().toISOString(),
     });
   } catch (error) {

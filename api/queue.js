@@ -1,4 +1,5 @@
 import { accountScopeForDevice, ensureQueueSchema, getSql } from "../lib/db.js";
+import { inferSessionTimes } from "../lib/session-times.js";
 
 function checkoutAppUrl(token) {
   return `./checkout.html?token=${encodeURIComponent(token)}`;
@@ -20,12 +21,11 @@ function parsePerfectMindDate(value) {
 }
 
 function parseSessionTimes(session) {
+  const inferred = inferSessionTimes(session);
+  if (inferred.startAt || inferred.endAt) return inferred;
   const start = parsePerfectMindDate(session?.startDateTime);
   const end = parsePerfectMindDate(session?.endDateTime);
-  return {
-    startAt: start ? start.toISOString() : null,
-    endAt: end ? end.toISOString() : null,
-  };
+  return { startAt: start ? start.toISOString() : null, endAt: end ? end.toISOString() : null };
 }
 
 function validateStatus(status) {
@@ -105,6 +105,42 @@ function attendeeFilterSql(db, scope, attendee, deviceId) {
       `;
 }
 
+async function deleteExpiredTrackedSessions(db) {
+  const rows = await db`
+    select id, session, start_at, end_at
+    from queued_sessions
+    where status in ('queued', 'action_required')
+  `;
+  const now = new Date();
+  let deleted = 0;
+
+  for (const row of rows) {
+    const inferred = inferSessionTimes(row.session);
+    const endAt = row.end_at || inferred.endAt;
+    if (!endAt || new Date(endAt) >= now) {
+      if ((inferred.startAt || inferred.endAt) && (!row.start_at || !row.end_at)) {
+        await db`
+          update queued_sessions
+          set start_at = coalesce(start_at, ${inferred.startAt}),
+              end_at = coalesce(end_at, ${inferred.endAt}),
+              updated_at = now()
+          where id = ${row.id}
+        `;
+      }
+      continue;
+    }
+
+    await db`
+      delete from queued_sessions
+      where id = ${row.id}
+        and status in ('queued', 'action_required')
+    `;
+    deleted += 1;
+  }
+
+  return deleted;
+}
+
 export default async function handler(request, response) {
   try {
     await ensureQueueSchema();
@@ -114,6 +150,7 @@ export default async function handler(request, response) {
       const deviceId =
         typeof request.query.deviceId === "string" ? request.query.deviceId : "";
       validateDeviceId(deviceId);
+      await deleteExpiredTrackedSessions(db);
       const scope = await accountScopeForDevice(db, deviceId);
       const selectedAttendee = await selectedAttendeeForDevice(db, deviceId);
 

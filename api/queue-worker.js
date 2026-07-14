@@ -1,5 +1,6 @@
 import { ensureQueueSchema, getSql } from "../lib/db.js";
 import { fetchLiveClassPages } from "../lib/live-classes.js";
+import { inferSessionTimes } from "../lib/session-times.js";
 import { attemptQueuedRegistration } from "./register.js";
 
 function runSource(request) {
@@ -54,12 +55,11 @@ function parsePerfectMindDate(value) {
 }
 
 function parseSessionTimes(session) {
+  const inferred = inferSessionTimes(session);
+  if (inferred.startAt || inferred.endAt) return inferred;
   const start = parsePerfectMindDate(session?.startDateTime);
   const end = parsePerfectMindDate(session?.endDateTime);
-  return {
-    startAt: start ? start.toISOString() : null,
-    endAt: end ? end.toISOString() : null,
-  };
+  return { startAt: start ? start.toISOString() : null, endAt: end ? end.toISOString() : null };
 }
 
 async function syncQueuedRowsWithLiveClasses(db) {

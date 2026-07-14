@@ -2,6 +2,7 @@ import { accountScopeForDevice, ensureQueueSchema, getSql } from "../lib/db.js";
 import { decryptText } from "../lib/crypto.js";
 import { syncAttendeesFromOfficialSite } from "../lib/attendee-sync.js";
 import { fetchLiveClassPages } from "../lib/live-classes.js";
+import { inferSessionTimes } from "../lib/session-times.js";
 import {
   fetchOfficialScheduleEvents,
   normalizeScheduleEvent,
@@ -34,12 +35,11 @@ function parsePerfectMindDate(value) {
 }
 
 function parseSessionTimes(session) {
+  const inferred = inferSessionTimes(session);
+  if (inferred.startAt || inferred.endAt) return inferred;
   const start = parsePerfectMindDate(session?.startDateTime);
   const end = parsePerfectMindDate(session?.endDateTime);
-  return {
-    startAt: start ? start.toISOString() : null,
-    endAt: end ? end.toISOString() : null,
-  };
+  return { startAt: start ? start.toISOString() : null, endAt: end ? end.toISOString() : null };
 }
 
 function officialScheduleKey(contactId, eventId, occurrenceDate) {

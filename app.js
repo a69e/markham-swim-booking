@@ -641,7 +641,7 @@ async function loadAccountStatus() {
       data.hasAccount ? "Account saved for this device." : "",
       data.hasAccount ? "success" : "",
     );
-    loadAttendees();
+    await loadAttendees();
     loadNotificationStatus();
   } catch {
     updateAccountButton(false);
@@ -671,7 +671,7 @@ async function saveAccount(event) {
 
     accountPassword.value = "";
     updateAccountButton(true, data.email, data.displayName || data.fullName);
-    loadAttendees();
+    await loadAttendees();
     loadNotificationStatus();
     setAccountMessage("Login verified and saved.", "success");
     setTimeout(() => accountDialog.close(), 700);

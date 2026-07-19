@@ -2,6 +2,7 @@ import { accountScopeForDevice, ensureQueueSchema, getSql } from "../lib/db.js";
 import { decryptText } from "../lib/crypto.js";
 import { syncAttendeesFromOfficialSite } from "../lib/attendee-sync.js";
 import { fetchLiveClassPages } from "../lib/live-classes.js";
+import { requeueExpiredCheckoutHolds } from "../lib/queue-maintenance.js";
 import { inferSessionTimes } from "../lib/session-times.js";
 import {
   fetchOfficialScheduleEvents,
@@ -75,6 +76,7 @@ export default async function handler(request, response) {
     validateDeviceId(deviceId);
 
     const scope = await accountScopeForDevice(db, deviceId);
+    let checkoutExpired = await requeueExpiredCheckoutHolds(db);
     const trackedRows = await rowsForScope(db, deviceId, scope.accountIds);
     const liveSessions = await fetchLiveClassPages(1);
     const byLiveKey = new Map(liveSessions.map((session) => [liveKey(session), session]));
@@ -84,7 +86,6 @@ export default async function handler(request, response) {
 
     let updated = 0;
     let deleted = 0;
-    let checkoutExpired = 0;
     let officialUnregistered = 0;
     let officialImported = 0;
     let officialScheduleSynced = false;
@@ -175,11 +176,6 @@ export default async function handler(request, response) {
       const ended =
         (endAt && new Date(endAt) < now) ||
         (row.end_at && new Date(row.end_at) < now);
-      const holdExpired =
-        row.status === "action_required" &&
-        row.checkout_token_expires_at &&
-        new Date(row.checkout_token_expires_at) < now;
-
       if (ended) {
         await db`
           delete from queued_sessions
@@ -198,27 +194,6 @@ export default async function handler(request, response) {
               updated_at = now()
           where id = ${row.id}
         `;
-        continue;
-      }
-
-      if (holdExpired) {
-        await db`
-          update queued_sessions
-          set status = 'queued',
-              session = ${JSON.stringify(nextSession)},
-              start_at = coalesce(${startAt}, start_at),
-              end_at = coalesce(${endAt}, end_at),
-              checkout_token = null,
-              checkout_token_expires_at = null,
-              checkout_url_cipher = null,
-              checkout_url_iv = null,
-              checkout_url_tag = null,
-              last_attempt_at = now(),
-              last_error = 'Checkout hold expired; queued again.',
-              updated_at = now()
-          where id = ${row.id}
-        `;
-        checkoutExpired += 1;
         continue;
       }
 

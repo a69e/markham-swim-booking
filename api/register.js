@@ -1621,7 +1621,7 @@ async function markActionRequired(db, queued, checkoutUrl) {
     set status = 'action_required',
         action_required_at = now(),
         checkout_token = ${token},
-        checkout_token_expires_at = now() + interval '25 minutes',
+        checkout_token_expires_at = now() + interval '30 minutes',
         checkout_url_cipher = ${encrypted.cipher},
         checkout_url_iv = ${encrypted.iv},
         checkout_url_tag = ${encrypted.tag},

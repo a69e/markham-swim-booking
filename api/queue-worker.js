@@ -1,5 +1,6 @@
 import { ensureQueueSchema, getSql } from "../lib/db.js";
 import { fetchLiveClassPages } from "../lib/live-classes.js";
+import { requeueExpiredCheckoutHolds } from "../lib/queue-maintenance.js";
 import { inferSessionTimes } from "../lib/session-times.js";
 import { attemptQueuedRegistration } from "./register.js";
 
@@ -122,6 +123,7 @@ export default async function handler(request, response) {
   try {
     await ensureQueueSchema();
     const db = getSql();
+    const requeuedExpiredCheckout = await requeueExpiredCheckoutHolds(db);
     const liveSync = await syncQueuedRowsWithLiveClasses(db);
     const rows = await activeQueuedRows(db);
     const results = [];
@@ -177,13 +179,14 @@ export default async function handler(request, response) {
         ${registeredCount},
         ${actionRequiredCount},
         ${errorCount},
-        ${JSON.stringify({ liveSync, results: results.slice(0, 8) })}
+        ${JSON.stringify({ requeuedExpiredCheckout, liveSync, results: results.slice(0, 8) })}
       )
     `;
 
     response.setHeader("Cache-Control", "no-store");
     response.status(200).json({
       ok: true,
+      requeuedExpiredCheckout,
       liveSync,
       checked: rows.length,
       registeredCount,

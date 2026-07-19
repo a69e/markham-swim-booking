@@ -1,5 +1,6 @@
 import { decryptText } from "../lib/crypto.js";
 import { ensureQueueSchema, getSql } from "../lib/db.js";
+import { requeueExpiredCheckoutHolds } from "../lib/queue-maintenance.js";
 
 export default async function handler(request, response) {
   if (request.method !== "GET") {
@@ -14,6 +15,7 @@ export default async function handler(request, response) {
     if (token.length < 24) throw new Error("Checkout link is invalid.");
 
     const db = getSql();
+    await requeueExpiredCheckoutHolds(db);
     const rows = await db`
       select checkout_url_cipher, checkout_url_iv, checkout_url_tag
       from queued_sessions
@@ -24,7 +26,16 @@ export default async function handler(request, response) {
     `;
 
     if (!rows.length) {
-      response.status(404).send("Checkout link expired or not found.");
+      if (request.query.format === "json") {
+        response.status(410).json({
+          ok: false,
+          expired: true,
+          message: "Checkout link expired. The session has been queued again.",
+        });
+        return;
+      }
+      response.writeHead(302, { Location: "../?checkoutExpired=1" });
+      response.end();
       return;
     }
 

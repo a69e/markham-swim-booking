@@ -1,4 +1,5 @@
 import { accountScopeForDevice, ensureQueueSchema, getSql } from "../lib/db.js";
+import { requeueExpiredCheckoutHolds } from "../lib/queue-maintenance.js";
 import { inferSessionTimes } from "../lib/session-times.js";
 
 function checkoutAppUrl(token) {
@@ -150,6 +151,7 @@ export default async function handler(request, response) {
       const deviceId =
         typeof request.query.deviceId === "string" ? request.query.deviceId : "";
       validateDeviceId(deviceId);
+      await requeueExpiredCheckoutHolds(db);
       await deleteExpiredTrackedSessions(db);
       const scope = await accountScopeForDevice(db, deviceId);
       const selectedAttendee = await selectedAttendeeForDevice(db, deviceId);
